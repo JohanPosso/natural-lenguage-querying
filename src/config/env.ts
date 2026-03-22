@@ -100,6 +100,13 @@ export const env = {
   azureClientId:     process.env.AZURE_CLIENT_ID,
   azureClientSecret: process.env.AZURE_CLIENT_SECRET,
 
+  // Método de autenticación Azure explícito (opcional).
+  // Valores posibles:
+  //   "service_principal" → ClientSecretCredential (requiere CLIENT_ID + CLIENT_SECRET)
+  //   "device_code"       → DeviceCodeCredential (imprime código al arrancar, sin instalar nada)
+  //   (vacío)             → auto: service_principal si hay CLIENT_ID, sino DefaultAzureCredential
+  azureAuthMethod: process.env.AZURE_AUTH_METHOD ?? "",
+
   // Agente 1 — Planificador / Intérprete NLU
   azurePlannerAgentId: process.env.AZURE_PLANNER_AGENT_ID ?? "",
   // Agente 2 — Worker / Redactor de respuestas OLAP

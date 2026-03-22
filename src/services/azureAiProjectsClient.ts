@@ -15,38 +15,19 @@
  *   AZURE_TENANT_ID=<Tenant ID> (ya debe estar)
  */
 import { AIProjectClient } from "@azure/ai-projects";
-import { ClientSecretCredential, DefaultAzureCredential } from "@azure/identity";
 import { env } from "../config/env";
+import { buildAzureCredential } from "./azureCredential";
 
 class AzureAiProjectsService {
   isConfigured(): boolean {
     return Boolean(env.azureExistingAiProjectEndpoint);
   }
 
-  /**
-   * Selecciona la credencial óptima según las variables de entorno disponibles.
-   * ClientSecretCredential es obligatorio en servidores sin az CLI ni VS Code.
-   */
-  private buildCredential() {
-    const { azureTenantId, azureClientId, azureClientSecret } = env;
-
-    if (azureTenantId && azureClientId && azureClientSecret) {
-      console.log("[AzureAI] Usando ClientSecretCredential (Service Principal)");
-      return new ClientSecretCredential(azureTenantId, azureClientId, azureClientSecret);
-    }
-
-    console.log("[AzureAI] Usando DefaultAzureCredential (entorno de desarrollador)");
-    return new DefaultAzureCredential({
-      tenantId: azureTenantId,
-      processTimeoutInMs: 15_000
-    });
-  }
-
   getProjectClient(): AIProjectClient {
     if (!env.azureExistingAiProjectEndpoint) {
       throw new Error("Falta AZURE_EXISTING_AIPROJECT_ENDPOINT en las variables de entorno.");
     }
-    return new AIProjectClient(env.azureExistingAiProjectEndpoint, this.buildCredential());
+    return new AIProjectClient(env.azureExistingAiProjectEndpoint, buildAzureCredential());
   }
 
   /** Returns an OpenAI-compatible client backed by the Azure AI Projects endpoint */
