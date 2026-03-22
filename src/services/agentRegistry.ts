@@ -12,7 +12,7 @@
  *  3. Expone callAgent() — única función que el resto del código usa.
  */
 import { AIProjectClient } from "@azure/ai-projects";
-import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
+import { DefaultAzureCredential, ClientSecretCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
 import axios from "axios";
 import { env } from "../config/env";
 
@@ -176,21 +176,36 @@ interface AgentCache {
 
 const _cache = new Map<AgentId, AgentCache>();
 let _client: AIProjectClient | null = null;
-let _credential: DefaultAzureCredential | null = null;
+let _credential: TokenCredential | null = null;
+
+/**
+ * Selecciona credencial Azure según entorno:
+ *  - ClientSecretCredential si hay AZURE_CLIENT_ID + AZURE_CLIENT_SECRET (servidores sin az/VS Code)
+ *  - DefaultAzureCredential en entornos de desarrollador (az CLI, VS Code, Managed Identity…)
+ */
+function buildCredential(): TokenCredential {
+  const { azureTenantId, azureClientId, azureClientSecret } = env;
+  if (azureTenantId && azureClientId && azureClientSecret) {
+    console.log("[AzureAI] agentRegistry → ClientSecretCredential (Service Principal)");
+    return new ClientSecretCredential(azureTenantId, azureClientId, azureClientSecret);
+  }
+  console.log("[AzureAI] agentRegistry → DefaultAzureCredential");
+  return new DefaultAzureCredential({ tenantId: azureTenantId, processTimeoutInMs: 15_000 });
+}
 
 function getClient(): AIProjectClient {
   if (!_client) {
     if (!env.azureExistingAiProjectEndpoint) {
       throw new Error("AZURE_EXISTING_AIPROJECT_ENDPOINT no está configurado.");
     }
-    _credential = new DefaultAzureCredential({ tenantId: env.azureTenantId });
+    _credential = buildCredential();
     _client = new AIProjectClient(env.azureExistingAiProjectEndpoint, _credential);
   }
   return _client;
 }
 
 async function getBearerToken(): Promise<string> {
-  if (!_credential) getClient(); // ensures _credential is set
+  if (!_credential) getClient();
   const provider = getBearerTokenProvider(_credential!, AI_SCOPE);
   return provider();
 }
