@@ -93,6 +93,13 @@ export const env = {
   azureExistingAiProjectEndpoint: process.env.AZURE_EXISTING_AIPROJECT_ENDPOINT,
   azureTenantId:                  process.env.AZURE_TENANT_ID,
 
+  // Service Principal — necesario en servidores sin az/VS Code/PowerShell Az
+  // Se obtiene desde el App Registration en Azure Active Directory:
+  //   AZURE_CLIENT_ID     = Application (client) ID del App Registration
+  //   AZURE_CLIENT_SECRET = Client secret generado en el App Registration
+  azureClientId:     process.env.AZURE_CLIENT_ID,
+  azureClientSecret: process.env.AZURE_CLIENT_SECRET,
+
   // Agente 1 — Planificador / Intérprete NLU
   azurePlannerAgentId: process.env.AZURE_PLANNER_AGENT_ID ?? "",
   // Agente 2 — Worker / Redactor de respuestas OLAP
