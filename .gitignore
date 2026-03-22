@@ -1,0 +1,27 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (contienen credenciales reales)
+.env
+
+# Compilación TypeScript
+dist/
+
+# Catálogo exportado (puede contener estructura interna del SSAS)
+catalog-export.json
+
+# Logs y debug
+logs/
+*.log
+/tmp/*.log
+
+# Archivos de sistema macOS
+.DS_Store
+**/.DS_Store
+
+# Carpeta temporal de pruebas
+Users/
+
+# Cache y archivos IDE
+.cursor/
+*.tsbuildinfo

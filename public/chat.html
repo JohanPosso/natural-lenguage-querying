@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat Analytics</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f172a;
+        --panel: #111827;
+        --panel-soft: #1f2937;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #22c55e;
+        --border: #374151;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        background: radial-gradient(circle at top, #1e293b, var(--bg));
+        color: var(--text);
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 300px 1fr;
+        min-height: 100vh;
+      }
+      .sidebar {
+        border-right: 1px solid var(--border);
+        background: rgba(17, 24, 39, 0.9);
+        padding: 16px;
+      }
+      .main {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        min-height: 100vh;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .title { font-size: 18px; font-weight: 700; }
+      button {
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button.primary { background: #14532d; border-color: #166534; }
+      .conversation-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+      }
+      .conversation-item {
+        width: 100%;
+        text-align: left;
+        background: var(--panel);
+      }
+      .conversation-item.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+      .messages {
+        padding: 24px;
+        overflow-y: auto;
+      }
+      .message {
+        max-width: 900px;
+        margin-bottom: 14px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(31, 41, 55, 0.75);
+        white-space: pre-wrap;
+      }
+      .message.user {
+        margin-left: auto;
+        background: rgba(20, 83, 45, 0.55);
+        border-color: #166534;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .composer {
+        border-top: 1px solid var(--border);
+        background: rgba(17, 24, 39, 0.95);
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+      }
+      input[type="text"] {
+        width: 100%;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .muted { color: var(--muted); font-size: 13px; }
+      .error { color: #fca5a5; }
+      @media (max-width: 900px) {
+        .layout { grid-template-columns: 1fr; }
+        .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="header">
+          <div class="title">Conversaciones</div>
+          <button id="newChatBtn" class="primary">Nueva</button>
+        </div>
+        <div id="conversationList" class="conversation-list"></div>
+      </aside>
+      <main class="main">
+        <section id="messages" class="messages">
+          <div class="muted">Escribe una pregunta para empezar.</div>
+        </section>
+        <form id="composer" class="composer">
+          <input
+            id="questionInput"
+            type="text"
+            autocomplete="off"
+            placeholder="Ejemplo: En 2026 cuantas matriculaciones hay de Ford y ventas declaradas"
+          />
+          <button id="sendBtn" class="primary" type="submit">Preguntar</button>
+        </form>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        conversations: [],
+        activeConversationId: null
+      };
+
+      const listEl = document.getElementById("conversationList");
+      const messagesEl = document.getElementById("messages");
+      const questionInputEl = document.getElementById("questionInput");
+      const composerEl = document.getElementById("composer");
+      const newChatBtnEl = document.getElementById("newChatBtn");
+
+      function escapeHtml(text) {
+        return text
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...options
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.error || body.code || "Error de API");
+        }
+        return body;
+      }
+
+      function renderConversations() {
+        listEl.innerHTML = "";
+        state.conversations.forEach((conv) => {
+          const btn = document.createElement("button");
+          btn.className = `conversation-item${conv.id === state.activeConversationId ? " active" : ""}`;
+          btn.textContent = conv.title || `Conversacion ${conv.id.slice(0, 8)}`;
+          btn.onclick = () => openConversation(conv.id);
+          listEl.appendChild(btn);
+        });
+      }
+
+      function appendMessage(role, content, createdAt) {
+        const container = document.createElement("div");
+        container.className = `message ${role}`;
+        container.innerHTML = `${escapeHtml(content)}<div class="meta">${role} - ${new Date(
+          createdAt || Date.now()
+        ).toLocaleString()}</div>`;
+        messagesEl.appendChild(container);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      async function loadConversations() {
+        const body = await api("/api/chat/conversations");
+        state.conversations = body.conversations || [];
+        renderConversations();
+      }
+
+      async function createConversation() {
+        const body = await api("/api/chat/conversations", { method: "POST", body: JSON.stringify({}) });
+        const conv = body.conversation;
+        state.activeConversationId = conv.id;
+        await loadConversations();
+        await openConversation(conv.id);
+      }
+
+      async function openConversation(id) {
+        state.activeConversationId = id;
+        renderConversations();
+        const body = await api(`/api/chat/conversations/${id}/messages`);
+        messagesEl.innerHTML = "";
+        (body.messages || []).forEach((msg) => appendMessage(msg.role, msg.content, msg.created_at));
+      }
+
+      async function sendQuestion(question) {
+        appendMessage("user", question, Date.now());
+        try {
+          const body = await api("/api/chat/ask", {
+            method: "POST",
+            body: JSON.stringify({
+              conversation_id: state.activeConversationId,
+              question
+            })
+          });
+          if (!state.activeConversationId) {
+            state.activeConversationId = body.conversation_id;
+            await loadConversations();
+          }
+          appendMessage("assistant", body.answer || "Sin respuesta", Date.now());
+        } catch (error) {
+          appendMessage("assistant", `Error: ${error.message}`, Date.now());
+        }
+      }
+
+      composerEl.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const question = questionInputEl.value.trim();
+        if (!question) return;
+        questionInputEl.value = "";
+        await sendQuestion(question);
+      });
+
+      newChatBtnEl.addEventListener("click", async () => {
+        messagesEl.innerHTML = "";
+        await createConversation();
+      });
+
+      (async () => {
+        try {
+          await loadConversations();
+          if (state.conversations.length) {
+            await openConversation(state.conversations[0].id);
+          }
+        } catch (error) {
+          messagesEl.innerHTML = `<div class="message error">No se pudo cargar el chat: ${escapeHtml(
+            error.message || String(error)
+          )}</div>`;
+        }
+      })();
+    </script>
+  </body>
+</html>

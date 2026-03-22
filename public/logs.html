@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pipeline Logs — OLAP Query</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap');
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #21262d;
+      --text: #e6edf3;
+      --muted: #7d8590;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --error: #f85149;
+      --info: #58a6ff;
+      --purple: #bc8cff;
+      --cyan: #39d3f5;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    header h1 { font-size: 15px; font-weight: 600; color: var(--cyan); }
+
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+    .badge-ok    { background: #0e3a1a; color: var(--ok); }
+    .badge-error { background: #2d1215; color: var(--error); }
+    .badge-inc   { background: #1f2937; color: var(--warn); }
+
+    #controls {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #controls label { color: var(--muted); font-size: 12px; }
+
+    #controls select, #controls button {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    #controls button:hover { border-color: var(--cyan); color: var(--cyan); }
+
+    #status {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    main { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid transparent;
+    }
+    .card-header:hover { background: rgba(255,255,255,0.03); }
+    .card.open .card-header { border-bottom-color: var(--border); }
+
+    .card-title {
+      font-weight: 600;
+      font-size: 13px;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .card-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+    .card-body { display: none; padding: 14px; }
+    .card.open .card-body { display: block; }
+
+    .section { margin-bottom: 14px; }
+    .section:last-child { margin-bottom: 0; }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    .pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .pill {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .pill-blue   { background: #0d2b4e; color: var(--info); }
+    .pill-green  { background: #0e3a1a; color: var(--ok); }
+    .pill-yellow { background: #2d2213; color: var(--warn); }
+    .pill-red    { background: #2d1215; color: var(--error); }
+    .pill-purple { background: #1e1535; color: var(--purple); }
+    .pill-cyan   { background: #032d3e; color: var(--cyan); }
+
+    .mdx-block {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+
+    .mdx-block pre {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--info);
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.6;
+    }
+
+    .mdx-result {
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .value-big {
+      font-size: 20px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--ok);
+    }
+
+    .answer-box {
+      background: var(--bg);
+      border-left: 3px solid var(--cyan);
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      font-size: 13px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .error-box {
+      background: #2d1215;
+      border-left: 3px solid var(--error);
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--error);
+    }
+
+    .empty { text-align: center; padding: 60px; color: var(--muted); }
+
+    .chevron { transition: transform 0.2s; color: var(--muted); font-size: 10px; }
+    .card.open .chevron { transform: rotate(90deg); }
+
+    #refresh-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ok);
+      animation: pulse 2s infinite;
+      flex-shrink: 0;
+    }
+    #refresh-dot.paused { background: var(--muted); animation: none; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div id="refresh-dot"></div>
+  <h1>🔍 Pipeline Logs</h1>
+  <span id="status">Cargando...</span>
+  <div id="controls">
+    <label>Mostrar últimas</label>
+    <select id="limitSel">
+      <option value="10" selected>10</option>
+      <option value="20">20</option>
+      <option value="50">50</option>
+    </select>
+    <button id="toggleBtn" onclick="toggleAuto()">⏸ Pausar</button>
+    <button onclick="load()">↻ Recargar</button>
+  </div>
+</header>
+
+<main id="main">
+  <div class="empty">Esperando consultas...</div>
+</main>
+
+<script>
+  let autoRefresh = true;
+  let timer = null;
+
+  function toggleAuto() {
+    autoRefresh = !autoRefresh;
+    document.getElementById('toggleBtn').textContent = autoRefresh ? '⏸ Pausar' : '▶ Reanudar';
+    document.getElementById('refresh-dot').classList.toggle('paused', !autoRefresh);
+    if (autoRefresh) scheduleNext();
+  }
+
+  function scheduleNext() {
+    clearTimeout(timer);
+    if (autoRefresh) timer = setTimeout(load, 3000);
+  }
+
+  function fmt(n) {
+    if (n == null) return '—';
+    const num = parseFloat(n);
+    if (isNaN(num)) return n;
+    if (Number.isInteger(num)) return num.toLocaleString('es-ES');
+    return num.toLocaleString('es-ES', { maximumFractionDigits: 4 });
+  }
+
+  function fmtElapsed(ms) {
+    if (ms == null) return '';
+    return ms < 1000 ? `${ms}ms` : `${(ms/1000).toFixed(1)}s`;
+  }
+
+  function fmtTs(ts) {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleTimeString('es-ES'); } catch { return ts; }
+  }
+
+  function pill(text, cls) {
+    return `<span class="pill pill-${cls}">${escHtml(String(text))}</span>`;
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function buildCard(q, idx) {
+    const statusCls = q.status === 'ok' ? 'badge-ok' : q.status === 'error' ? 'badge-error' : 'badge-inc';
+    const statusTxt = q.status === 'ok' ? '✓ OK' : q.status === 'error' ? '✗ Error' : '⏳';
+    const elapsed = q.elapsed_ms ? ` · ${fmtElapsed(q.elapsed_ms)}` : '';
+
+    // Filters section
+    let filtersHtml = '';
+    if (q.filters_requested?.length) {
+      const resolved = new Set((q.filters_resolved || []).map(f => String(f.hierarchy)));
+      const notFound = new Set((q.filters_not_found || []).map(f => String(f.hierarchy)));
+      const pills = q.filters_requested.map(f => {
+        const hier = f.split('=')[0];
+        const cls = notFound.has(hier) ? 'red' : 'green';
+        return pill(f, cls);
+      }).join('');
+      filtersHtml = `
+        <div class="section">
+          <div class="section-title">Filtros (${q.filters_requested.length})</div>
+          <div class="pill-row">${pills}</div>
+        </div>`;
+    }
+    if (q.filters_not_found?.length) {
+      const notFoundPills = q.filters_not_found.map(f =>
+        pill(`${f.hierarchy} = "${f.value}" ✗ no encontrado`, 'red')
+      ).join('');
+      filtersHtml += `
+        <div class="section">
+          <div class="section-title">⚠ Filtros NO resueltos en SSAS</div>
+          <div class="pill-row">${notFoundPills}</div>
+        </div>`;
+    }
+
+    // MDX queries section
+    let mdxHtml = '';
+    if (q.mdx_queries?.length) {
+      const blocks = q.mdx_queries.map(m => {
+        const statusColor = m.status === 'ok' ? 'ok' : 'error';
+        const valueHtml = m.value != null
+          ? `<span class="value-big">${fmt(m.value)}</span>`
+          : `<span style="color:var(--error)">${escHtml(m.error || 'sin datos')}</span>`;
+        return `
+          <div class="mdx-block">
+            <div class="mdx-result">
+              <span class="badge ${m.status === 'ok' ? 'badge-ok' : 'badge-error'}">${m.status === 'ok' ? '✓' : '✗'}</span>
+              <span style="color:var(--muted);font-size:11px">${escHtml(m.label || m.measure || '')}</span>
+            </div>
+            <div class="mdx-result" style="margin-top:8px">
+              ${valueHtml}
+            </div>
+            ${m.mdx ? `<pre style="margin-top:8px">${escHtml(m.mdx)}</pre>` : ''}
+          </div>`;
+      }).join('');
+      mdxHtml = `
+        <div class="section">
+          <div class="section-title">Consultas MDX (${q.mdx_queries.length})</div>
+          ${blocks}
+        </div>`;
+    }
+
+    // Answer / error section
+    let answerHtml = '';
+    if (q.answer) {
+      answerHtml = `
+        <div class="section">
+          <div class="section-title">Respuesta generada</div>
+          <div class="answer-box">${escHtml(q.answer)}</div>
+        </div>`;
+    }
+    if (q.error) {
+      answerHtml = `
+        <div class="section">
+          <div class="section-title">Error</div>
+          <div class="error-box">${escHtml(q.error)}</div>
+        </div>`;
+    }
+
+    return `
+      <div class="card" id="card-${idx}">
+        <div class="card-header" onclick="toggleCard(${idx})">
+          <span class="chevron">▶</span>
+          <span class="badge ${statusCls}">${statusTxt}</span>
+          <span class="card-title">${escHtml(q.question || '(sin pregunta)')}</span>
+          <span class="card-meta">${fmtTs(q.ts)}${elapsed} · ${escHtml(q.cube || '—')}</span>
+        </div>
+        <div class="card-body">
+          <div class="section">
+            <div class="pill-row">
+              ${(q.measures || []).map(m => pill(m, 'purple')).join('')}
+              ${q.cube ? pill(q.cube, 'cyan') : ''}
+            </div>
+          </div>
+          ${filtersHtml}
+          ${mdxHtml}
+          ${answerHtml}
+        </div>
+      </div>`;
+  }
+
+  function toggleCard(idx) {
+    const card = document.getElementById(`card-${idx}`);
+    if (card) card.classList.toggle('open');
+  }
+
+  async function load() {
+    const limit = document.getElementById('limitSel').value;
+    try {
+      const res = await fetch(`/api/debug/summary?limit=${limit}`);
+      const data = await res.json();
+      const main = document.getElementById('main');
+      const status = document.getElementById('status');
+
+      if (!data.queries?.length) {
+        main.innerHTML = '<div class="empty">Sin consultas aún. Haz una pregunta en <a href="/chat" style="color:var(--cyan)">/chat</a>.</div>';
+        status.textContent = 'Sin datos';
+      } else {
+        const wasOpen = new Set(
+          [...document.querySelectorAll('.card.open')].map(c => c.id)
+        );
+        main.innerHTML = data.queries.map((q, i) => buildCard(q, i)).join('');
+        // Restore open state + auto-open first card if new
+        data.queries.forEach((_, i) => {
+          const card = document.getElementById(`card-${i}`);
+          if (card && (wasOpen.has(`card-${i}`) || (i === 0 && !wasOpen.size))) {
+            card.classList.add('open');
+          }
+        });
+        status.textContent = `${data.queries.length} consultas · actualizado ${new Date().toLocaleTimeString('es-ES')}`;
+      }
+    } catch (e) {
+      document.getElementById('status').textContent = 'Error cargando logs';
+    }
+    scheduleNext();
+  }
+
+  load();
+</script>
+</body>
+</html>
