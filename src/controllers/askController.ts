@@ -1028,7 +1028,10 @@ export async function runAskPipeline(
 
   // ── Step 1: Agent 1 — Interpreter: extract structured intent from the question ─
   pLog("🧠", MAGENTA, "Agent 1 (Intérprete): extrayendo intención...");
-  const intent = await interpreterAgent.analyze(normalizedPrompt, sanitizedHistory);
+  // Pasar los nombres de los cubos visibles para que el intérprete use preferredCube
+  // solo con cubos a los que este usuario tiene acceso real.
+  const visibleCubeNames = visibleCubes.map((c) => c.catalog);
+  const intent = await interpreterAgent.analyze(normalizedPrompt, sanitizedHistory, visibleCubeNames);
   await debugLogger.log("ask", "intent_extracted", { traceId, intent });
 
   // Use intent to detect meta-questions (more reliable than raw keyword matching)

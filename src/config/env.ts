@@ -51,6 +51,13 @@ const parsedDbUrl = parseSqlServerDatabaseUrl(process.env.DATABASE_URL);
 export const env = {
   port: Number(process.env.PORT ?? 3000),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 30_000),
+  
+  // ── CORS ─────────────────────────────────────────────────────────────────
+  // Lista separada por comas con los orígenes permitidos para el frontend.
+  // Ej:
+  //   CORS_ALLOWED_ORIGINS=http://localhost:5173,http://mi-dominio.com
+  // Usar '*' para permitir cualquier origen (útil para dev).
+  corsAllowedOrigins: process.env.CORS_ALLOWED_ORIGINS ?? "*",
 
   // ── Autenticación API Launcher ────────────────────────────────────────────
   apiLauncherEndpoint: process.env.API_LAUNCHER_ENDPOINT ?? "",

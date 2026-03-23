@@ -301,7 +301,8 @@ Pregunta: "qué cubos tengo disponibles"
 
 export async function analyze(
   question: string,
-  conversationHistory: ConversationTurn[] = []
+  conversationHistory: ConversationTurn[] = [],
+  visibleCubeNames: string[] = []
 ): Promise<QueryIntent> {
   const recentHistory = conversationHistory.slice(-4);
   let historyBlock = "";
@@ -312,10 +313,19 @@ export async function analyze(
       ).join("\n") + "\n=============================================================";
   }
 
+  // Bloque dinámico con los cubos reales del usuario — fundamental para preferredCube
+  const cubeBlock = visibleCubeNames.length > 0
+    ? `\n=== CUBOS DE DATOS ACCESIBLES POR ESTE USUARIO ===\n` +
+      `Solo estos cubos están disponibles para este usuario. Si el usuario menciona uno de ellos\n` +
+      `(por nombre o descripción), úsalo como preferredCube. No inventes cubos que no estén aquí.\n` +
+      visibleCubeNames.map((n, i) => `  ${i + 1}. "${n}"`).join("\n") +
+      `\n===================================================\n`
+    : "";
+
   const userMessage = `${getCurrentDateContext()}
 
 ${buildJargonContextBlock()}
-
+${cubeBlock}
 ${EXAMPLES}
 
 Extrae la intención de esta pregunta:

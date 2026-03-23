@@ -15,6 +15,38 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.resolve(process.cwd(), "public")));
 
+// ── CORS (para front en otro dominio/puerto) ──────────────────────────────
+// El front envía Authorization y eso dispara preflight OPTIONS.
+// Permitimos Authorization + Content-Type y respondemos a OPTIONS.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    const allowed = env.corsAllowedOrigins.trim();
+    const allowAny = allowed === "*" || allowed.length === 0;
+
+    const list = allowAny
+      ? []
+      : allowed
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+    if (allowAny || list.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
+  }
+  // Si no hay origin (ej. curl), omitimos la cabecera CORS.
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Access-Control-Max-Age", "86400");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 // Rutas públicas (sin autenticación)
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
