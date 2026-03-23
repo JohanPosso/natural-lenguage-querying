@@ -135,9 +135,24 @@ Una sola palabra clave que describe el área de negocio. Opciones:
 ════════════════════════════════════════════════════════════
  CONCEPTO 7 — preferredCube (¿el usuario dice un cubo?)
 ════════════════════════════════════════════════════════════
-Solo si el usuario MENCIONA EXPLÍCITAMENTE un cubo, base de datos, o marca como contexto.
-Ejemplos: "en el cubo Nissan", "datos de Nissan", "en la base de Renault Trucks"
-Si no lo menciona → null.
+Rellena este campo cuando el usuario menciona explícitamente un cubo, base de datos,
+marca o fuente de datos como contexto de su pregunta. Incluye también preguntas
+META sobre un cubo específico ("qué me puedes decir sobre X", "qué tiene el cubo Y",
+"explícame el cubo de Z", "qué datos hay en X").
+
+Ejemplos con preferredCube:
+  "en el cubo Nissan" → "Nissan"
+  "datos de Nissan" → "Nissan"
+  "en la base de Renault" → "Renault"
+  "que me puedes decir sobre el cubo de matriculaciones" → "Matriculaciones"
+  "qué datos hay en el cubo ART" → "ART"
+  "explícame el cubo de Nissan" → "Nissan"
+  "qué tiene el cubo de Ford" → "Ford"
+
+Si el usuario pregunta de forma genérica sin mencionar cubo concreto → null.
+Ejemplos SIN preferredCube:
+  "qué cubos tengo disponibles" → null
+  "a qué datos tengo acceso" → null
 
 ════════════════════════════════════════════════════════════
  REGLAS FINALES
@@ -243,6 +258,42 @@ Pregunta: "cuántos híbridos se vendieron en España en 2023"
   "isMetaQuestion": false,
   "domain": "vehicle_registration"
 }
+
+Pregunta: "que me puedes decir sobre el cubo de matriculaciones"
+{
+  "reasoning": "El usuario pregunta sobre la información disponible en el cubo de matriculaciones específicamente.",
+  "primaryMetrics": [],
+  "entities": [],
+  "timeFilters": {},
+  "preferredCube": "Matriculaciones",
+  "isFollowUp": false,
+  "isMetaQuestion": true,
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "qué datos tiene el cubo de Nissan"
+{
+  "reasoning": "Pregunta meta sobre el cubo de Nissan — qué medidas y dimensiones contiene.",
+  "primaryMetrics": [],
+  "entities": [],
+  "timeFilters": {},
+  "preferredCube": "Nissan",
+  "isFollowUp": false,
+  "isMetaQuestion": true,
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "qué cubos tengo disponibles"
+{
+  "reasoning": "El usuario pregunta qué cubos tiene accesibles, sin mencionar uno en concreto.",
+  "primaryMetrics": [],
+  "entities": [],
+  "timeFilters": {},
+  "preferredCube": null,
+  "isFollowUp": false,
+  "isMetaQuestion": true,
+  "domain": "general"
+}
 === FIN DE EJEMPLOS ===
 `;
 
@@ -304,12 +355,13 @@ Responde SOLO con el JSON, sin texto adicional:`;
   intent.timeFilters    = intent.timeFilters ?? {};
 
   console.log(`[Agent1:Intérprete] →`, {
-    domain:    intent.domain,
-    metrics:   intent.primaryMetrics,
-    entities:  intent.entities.map((e) => `${e.type}:${e.rawValue}`),
-    time:      intent.timeFilters,
-    followUp:  intent.isFollowUp,
-    meta:      intent.isMetaQuestion
+    domain:       intent.domain,
+    metrics:      intent.primaryMetrics,
+    entities:     intent.entities.map((e) => `${e.type}:${e.rawValue}`),
+    time:         intent.timeFilters,
+    followUp:     intent.isFollowUp,
+    meta:         intent.isMetaQuestion,
+    preferredCube: intent.preferredCube ?? null
   });
 
   return intent;

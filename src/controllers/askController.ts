@@ -1033,15 +1033,24 @@ export async function runAskPipeline(
 
   // Use intent to detect meta-questions (more reliable than raw keyword matching)
   if (intent.isMetaQuestion) {
-    // 1) Detect self-description questions ("¿qué eres?", "¿qué puedes hacer?", etc.)
     const promptNorm = normalize(prompt);
+
+    // 1) Si hay preferredCube, ir directamente a la descripción del cubo específico
+    //    ANTES de cualquier otro chequeo para evitar falsos positivos en self-description.
+    //    Ej: "que me puedes decir sobre el cubo de matriculaciones" → preferredCube="Matriculaciones"
+    //    NO debe caer en isSelfDescription aunque empiece por "que" y contenga "puedes".
+
+    // 2) Detect self-description questions ("¿qué eres?", "¿qué puedes hacer?", etc.)
+    //    Solo aplica si NO hay un cubo específico mencionado (ni en preferredCube ni en el texto).
+    const mentionsCube = promptNorm.includes("cubo") || promptNorm.includes("datos de") || promptNorm.includes("informacion de");
     const isSelfDescription =
+      !intent.preferredCube &&
+      !mentionsCube &&
       /^(que|quien|como|para que|cuál es tu|que tipo de|describe|explica|cuéntame sobre ti|cuéntame de ti)/.test(promptNorm) &&
       (promptNorm.includes("eres") || promptNorm.includes("puedes") || promptNorm.includes("haces") ||
-       promptNorm.includes("funciona") || promptNorm.includes("sirves") || promptNorm.includes("eres") ||
-       promptNorm.includes("eres un") || promptNorm.includes("sei"));
+       promptNorm.includes("funciona") || promptNorm.includes("sirves") || promptNorm.includes("sei"));
 
-    if (isSelfDescription || (promptNorm.match(/^(que eres|quien eres|que puedes|para que sirves|como funciona)/))) {
+    if (isSelfDescription || (!intent.preferredCube && !mentionsCube && promptNorm.match(/^(que eres|quien eres|que puedes|para que sirves|como funciona)/))) {
       const cubeNames = visibleCubes.map((c) => `"${c.catalog}"`).join(", ");
       return {
         question: prompt,
