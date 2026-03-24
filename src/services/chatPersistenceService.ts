@@ -261,6 +261,20 @@ class ChatPersistenceService {
       created_at: new Date().toISOString()
     };
   }
+
+  async deleteConversation(conversationId: string): Promise<boolean> {
+    const pool = await this.getReadyPool();
+    const result = await pool
+      .request()
+      .input("conversationId", conversationId)
+      .query(`
+        DELETE FROM dbo.messages WHERE conversation_id = @conversationId;
+        DELETE FROM dbo.conversations WHERE id = @conversationId;
+        SELECT @@ROWCOUNT AS affected;
+      `);
+
+    return Number(result.recordset?.[0]?.affected ?? 0) > 0;
+  }
 }
 
 export const chatPersistenceService = new ChatPersistenceService();

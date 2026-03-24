@@ -1,0 +1,689 @@
+openapi: 3.0.3
+info:
+  title: Natural Language Querying API
+  version: 1.0.0
+  description: >
+    API para consultas analíticas en lenguaje natural con persistencia de conversaciones
+    y gestión de reglas globales.
+servers:
+  - url: http://localhost:3000
+    description: Local
+
+tags:
+  - name: Ask
+    description: Consulta analítica directa (sin persistencia de conversación)
+  - name: Chat
+    description: Conversaciones persistidas y mensajes
+  - name: Global Rules
+    description: CRUD de reglas globales de negocio/sistema
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        error:
+          type: string
+        message:
+          type: string
+      additionalProperties: true
+
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, created_at, updated_at]
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversation_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        payload:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, conversation_id, role, content, created_at]
+
+    MappedMeasure:
+      type: object
+      properties:
+        technical_name:
+          type: string
+        friendly_name:
+          type: string
+        mdx_unique_name:
+          type: string
+      required: [technical_name, friendly_name, mdx_unique_name]
+
+    MappedFilter:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [year, month, dimension]
+        hierarchy_mdx:
+          type: string
+        friendly_name:
+          type: string
+        values:
+          type: array
+          items:
+            type: string
+      required: [type, hierarchy_mdx, friendly_name, values]
+
+    CatalogSelection:
+      type: object
+      properties:
+        reasoning:
+          type: string
+        cube_name:
+          type: string
+        measures:
+          type: array
+          items:
+            $ref: "#/components/schemas/MappedMeasure"
+        filters:
+          type: array
+          items:
+            $ref: "#/components/schemas/MappedFilter"
+      additionalProperties: true
+
+    FilterTuple:
+      type: object
+      properties:
+        dimension_friendly:
+          type: string
+        dimension_mdx:
+          type: string
+        value_caption:
+          type: string
+        member_unique_name:
+          type: string
+      required: [dimension_friendly, dimension_mdx, value_caption, member_unique_name]
+
+    MeasureResult:
+      type: object
+      properties:
+        technical_name:
+          type: string
+        friendly_name:
+          type: string
+        cube_name:
+          type: string
+        mdx:
+          type: string
+        value:
+          type: string
+          nullable: true
+        catalog:
+          type: string
+        filter_combo:
+          type: array
+          items:
+            $ref: "#/components/schemas/FilterTuple"
+        filter_label:
+          type: string
+      required:
+        - technical_name
+        - friendly_name
+        - cube_name
+        - mdx
+        - catalog
+        - filter_combo
+        - filter_label
+
+    AskData:
+      type: object
+      properties:
+        value:
+          type: string
+          nullable: true
+        cube:
+          type: string
+          nullable: true
+        measure:
+          type: string
+          nullable: true
+        mdx:
+          type: string
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/MeasureResult"
+        selection:
+          $ref: "#/components/schemas/CatalogSelection"
+      required: [results, selection]
+
+    AskResponse:
+      type: object
+      properties:
+        question:
+          type: string
+        answer:
+          type: string
+        data:
+          $ref: "#/components/schemas/AskData"
+      required: [question, answer, data]
+
+    ChatAskResponse:
+      allOf:
+        - $ref: "#/components/schemas/AskResponse"
+        - type: object
+          properties:
+            conversation_id:
+              type: string
+              format: uuid
+          required: [conversation_id]
+
+    GlobalRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        content:
+          type: string
+        is_active:
+          type: boolean
+        priority:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, name, content, is_active, priority, created_at, updated_at]
+
+paths:
+  /ask:
+    post:
+      tags: [Ask]
+      summary: Ejecuta una consulta analítica directa
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                question:
+                  type: string
+                  description: Pregunta del usuario
+                user_prompt:
+                  type: string
+                  description: Alias legacy de question
+              anyOf:
+                - required: [question]
+                - required: [user_prompt]
+      responses:
+        "200":
+          description: Respuesta de la consulta
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno del pipeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/chat/conversations:
+    get:
+      tags: [Chat]
+      summary: Lista conversaciones
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Conversaciones
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Conversation"
+                required: [conversations]
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Chat]
+      summary: Crea conversación
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+      responses:
+        "201":
+          description: Conversación creada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation:
+                    $ref: "#/components/schemas/Conversation"
+                required: [conversation]
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/chat/conversations/{id}:
+    delete:
+      tags: [Chat]
+      summary: Elimina una conversación y sus mensajes
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Conversación eliminada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  id:
+                    type: string
+                    format: uuid
+                required: [ok, id]
+        "404":
+          description: Conversación no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/chat/conversations/{id}/messages:
+    get:
+      tags: [Chat]
+      summary: Lista mensajes de una conversación
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Mensajes de la conversación
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Message"
+                required: [messages]
+        "400":
+          description: ID inválido/faltante
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/chat/ask:
+    post:
+      tags: [Chat]
+      summary: Ejecuta pregunta en conversación persistida
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conversation_id:
+                  type: string
+                  format: uuid
+                  description: Si no se envía, el backend crea una nueva conversación
+                question:
+                  type: string
+                user_prompt:
+                  type: string
+              anyOf:
+                - required: [question]
+                - required: [user_prompt]
+      responses:
+        "200":
+          description: Respuesta con persistencia
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatAskResponse"
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/global-rules:
+    get:
+      tags: [Global Rules]
+      summary: Lista reglas globales
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        "200":
+          description: Reglas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GlobalRule"
+                required: [rules]
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Global Rules]
+      summary: Crea una regla global
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name:
+                  type: string
+                content:
+                  type: string
+                is_active:
+                  type: boolean
+                  default: true
+                priority:
+                  type: integer
+                  default: 100
+      responses:
+        "201":
+          description: Regla creada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rule:
+                    $ref: "#/components/schemas/GlobalRule"
+                required: [rule]
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/global-rules/{id}:
+    patch:
+      tags: [Global Rules]
+      summary: Actualiza una regla global
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                content:
+                  type: string
+                is_active:
+                  type: boolean
+                priority:
+                  type: integer
+      responses:
+        "200":
+          description: Regla actualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rule:
+                    $ref: "#/components/schemas/GlobalRule"
+                required: [rule]
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Regla no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Global Rules]
+      summary: Elimina una regla global
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Regla eliminada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  id:
+                    type: string
+                    format: uuid
+                required: [ok, id]
+        "404":
+          description: Regla no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

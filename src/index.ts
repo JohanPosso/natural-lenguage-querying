@@ -1,19 +1,30 @@
 import express, { Request, Response } from "express";
 import path from "path";
+import swaggerUi from "swagger-ui-express";
+import YAML from "yamljs";
 import { env } from "./config/env";
 import { authMiddleware } from "./middlewares/authMiddleware";
 import { askController } from "./controllers/askController";
 import {
   askInConversationController,
   createConversationController,
+  deleteConversationController,
   listConversationsController,
   listMessagesController
 } from "./controllers/chatController";
 import { getDebugLogsController, getDebugSummaryController } from "./controllers/debugController";
+import {
+  createGlobalRuleController,
+  deleteGlobalRuleController,
+  listGlobalRulesController,
+  updateGlobalRuleController
+} from "./controllers/globalRulesController";
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.resolve(process.cwd(), "public")));
+
+const swaggerDocument = YAML.load(path.resolve(process.cwd(), "swagger.yaml"));
 
 // ── CORS (para front en otro dominio/puerto) ──────────────────────────────
 // El front envía Authorization y eso dispara preflight OPTIONS.
@@ -56,13 +67,29 @@ app.get("/chat", (_req: Request, res: Response) => {
   res.sendFile(path.resolve(process.cwd(), "public", "chat.html"));
 });
 
+// OpenAPI/Swagger spec (archivo YAML estático)
+app.get("/api/docs/swagger.yaml", (_req: Request, res: Response) => {
+  res.type("application/yaml");
+  res.sendFile(path.resolve(process.cwd(), "swagger.yaml"));
+});
+
+// Swagger UI (visual)
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
 // Rutas protegidas — requieren token válido del API Launcher
 app.post("/ask", authMiddleware, askController);
 
 app.get("/api/chat/conversations", authMiddleware, listConversationsController);
 app.post("/api/chat/conversations", authMiddleware, createConversationController);
+app.delete("/api/chat/conversations/:id", authMiddleware, deleteConversationController);
 app.get("/api/chat/conversations/:id/messages", authMiddleware, listMessagesController);
 app.post("/api/chat/ask", authMiddleware, askInConversationController);
+
+// Reglas globales de negocio/sistema (CRUD)
+app.get("/api/global-rules", authMiddleware, listGlobalRulesController);
+app.post("/api/global-rules", authMiddleware, createGlobalRuleController);
+app.patch("/api/global-rules/:id", authMiddleware, updateGlobalRuleController);
+app.delete("/api/global-rules/:id", authMiddleware, deleteGlobalRuleController);
 
 // Debug — solo accesible internamente (sin auth para facilitar monitoreo)
 app.get("/api/debug/logs", getDebugLogsController);

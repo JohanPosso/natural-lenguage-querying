@@ -65,6 +65,29 @@ export async function listMessagesController(req: Request, res: Response): Promi
   }
 }
 
+export async function deleteConversationController(req: Request, res: Response): Promise<Response> {
+  try {
+    const conversationId = String(req.params.id ?? "").trim();
+    if (!conversationId) {
+      return res.status(400).json({ error: "Conversation id is required." });
+    }
+
+    const removed = await chatPersistenceService.deleteConversation(conversationId);
+    if (!removed) {
+      return res.status(404).json({ error: "Conversation not found." });
+    }
+
+    await debugLogger.log("chat", "delete_conversation", { conversation_id: conversationId });
+    return res.status(200).json({ ok: true, id: conversationId });
+  } catch (error) {
+    await debugLogger.log("chat", "delete_conversation_error", { error: (error as Error).message });
+    return res.status(500).json({
+      code: "CHAT_DELETE_CONVERSATION_ERROR",
+      error: (error as Error).message
+    });
+  }
+}
+
 export async function askInConversationController(req: Request, res: Response): Promise<Response> {
   try {
     const traceId = randomUUID();

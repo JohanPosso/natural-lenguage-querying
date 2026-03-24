@@ -152,6 +152,23 @@ Mock response:
 }
 ```
 
+`DELETE /api/chat/conversations/:id`
+- `:id` = `conversation_id`
+
+Mock response:
+```json
+{
+  "ok": true,
+  "id": "798d841d-138a-414b-aad6-e2a5aad09749"
+}
+```
+
+Errores:
+- `404`:
+```json
+{ "error": "Conversation not found." }
+```
+
 `GET /api/chat/conversations/:id/messages`
 - `:id` = `conversation_id`
 
@@ -171,6 +188,115 @@ Mock response:
     }
   ]
 }
+```
+
+## Reglas globales (CRUD)
+Tabla gestionada por backend: `dbo.global_rules`
+
+Campos:
+- `id` (UUID)
+- `name` (string)
+- `content` (string largo)
+- `is_active` (boolean)
+- `priority` (number; menor = más prioridad)
+- `created_at`, `updated_at`
+
+### Listar reglas
+`GET /api/global-rules`
+- Query opcional: `limit` (default: 200)
+
+Mock response:
+```json
+{
+  "rules": [
+    {
+      "id": "d9f3f6f0-b0fb-4f33-b8df-6f8c30d8c29a",
+      "name": "No inventar filtros",
+      "content": "Nunca crear filtros no mencionados por el usuario.",
+      "is_active": true,
+      "priority": 10,
+      "created_at": "2026-03-23T11:00:00.000Z",
+      "updated_at": "2026-03-23T11:00:00.000Z"
+    }
+  ]
+}
+```
+
+### Crear regla
+`POST /api/global-rules`
+
+Body:
+```json
+{
+  "name": "Responder en español",
+  "content": "Responder siempre en español al usuario final.",
+  "is_active": true,
+  "priority": 20
+}
+```
+
+Mock response:
+```json
+{
+  "rule": {
+    "id": "49b555f8-36e6-4be2-9476-e4cc3ccf7a1e",
+    "name": "Responder en español",
+    "content": "Responder siempre en español al usuario final.",
+    "is_active": true,
+    "priority": 20,
+    "created_at": "2026-03-23T11:10:00.000Z",
+    "updated_at": "2026-03-23T11:10:00.000Z"
+  }
+}
+```
+
+### Actualizar regla
+`PATCH /api/global-rules/:id`
+
+Body parcial (al menos uno):
+- `name`
+- `content`
+- `is_active`
+- `priority`
+
+Ejemplo request:
+```json
+{
+  "is_active": false,
+  "priority": 80
+}
+```
+
+Mock response:
+```json
+{
+  "rule": {
+    "id": "49b555f8-36e6-4be2-9476-e4cc3ccf7a1e",
+    "name": "Responder en español",
+    "content": "Responder siempre en español al usuario final.",
+    "is_active": false,
+    "priority": 80,
+    "created_at": "2026-03-23T11:10:00.000Z",
+    "updated_at": "2026-03-23T11:12:00.000Z"
+  }
+}
+```
+
+### Eliminar regla
+`DELETE /api/global-rules/:id`
+
+Mock response:
+```json
+{
+  "ok": true,
+  "id": "49b555f8-36e6-4be2-9476-e4cc3ccf7a1e"
+}
+```
+
+Errores:
+- `404`:
+```json
+{ "error": "Rule not found." }
 ```
 
 ### Preguntar en una conversación (ENDPOINT PRINCIPAL del front)
