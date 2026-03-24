@@ -22,16 +22,18 @@ import {
 import { memberValueService } from "./services/memberValueService";
 import { xmlaSyncService } from "./services/xmlaSyncService";
 
+if (!env.publicUrl) {
+  console.error("ERROR: La variable PUBLIC_URL no está definida en el .env. El servidor no puede arrancar sin ella.");
+  process.exit(1);
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.resolve(process.cwd(), "public")));
 
-// Cargar swagger e inyectar la URL pública del servidor desde la variable de entorno.
-// Esto evita que Swagger UI use "localhost" cuando la app corre en un servidor real.
+// Inyectar la URL pública en el documento Swagger para que apunte al servidor real.
 const swaggerDocument = YAML.load(path.resolve(process.cwd(), "swagger.yaml")) as Record<string, unknown>;
-if (swaggerDocument && env.publicUrl) {
-  swaggerDocument.servers = [{ url: env.publicUrl, description: "Servidor activo" }];
-}
+swaggerDocument.servers = [{ url: env.publicUrl, description: "Servidor activo" }];
 
 // -- CORS (para front en otro dominio/puerto) ------------------------------
 // El front envía Authorization y eso dispara preflight OPTIONS.
@@ -81,10 +83,10 @@ app.get("/chat", (_req: Request, res: Response) => {
   res.sendFile(path.resolve(process.cwd(), "public", "chat.html"));
 });
 
-// OpenAPI/Swagger spec (archivo YAML estático)
+// OpenAPI/Swagger spec — devuelve el documento ya con la URL pública inyectada (no el archivo crudo)
 app.get("/api/docs/swagger.yaml", (_req: Request, res: Response) => {
-  res.type("application/yaml");
-  res.sendFile(path.resolve(process.cwd(), "swagger.yaml"));
+  res.type("application/json");
+  res.json(swaggerDocument);
 });
 
 // Swagger UI (visual)

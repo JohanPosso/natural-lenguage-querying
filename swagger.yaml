@@ -6,8 +6,8 @@ info:
     API para consultas analíticas en lenguaje natural con persistencia de conversaciones
     y gestión de reglas globales.
 servers:
-  - url: http://localhost:3000
-    description: Local
+  - url: /
+    description: Servidor activo (la URL real se inyecta desde PUBLIC_URL al arrancar)
 
 tags:
   - name: Ask
