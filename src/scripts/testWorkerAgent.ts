@@ -96,12 +96,12 @@ async function run(): Promise<void> {
 
   try {
     const answer = await callAgentById(client, env.azureWorkerAgentId, question);
-    console.log("\n✅ WORKER_AGENT_OK");
+    console.log("\n[OK] WORKER_AGENT_OK");
     console.log("Respuesta:");
     console.log(answer);
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
-    console.error("\n❌ WORKER_AGENT_ERR");
+    console.error("\n[ERROR] WORKER_AGENT_ERR");
     console.error(msg);
 
     // Si falla el Agents API, intentar fallback con Responses API
@@ -121,7 +121,7 @@ async function run(): Promise<void> {
         resp.data?.output_text ??
         resp.data?.output?.[0]?.content?.[0]?.text ??
         JSON.stringify(resp.data).slice(0, 200);
-      console.log("\n✅ RESPONSES_API_OK (fallback)");
+      console.log("\n[OK] RESPONSES_API_OK (fallback)");
       console.log("Respuesta:", text);
     } catch (fallbackErr) {
       console.error("[fallback] También falló:", (fallbackErr as Error).message);

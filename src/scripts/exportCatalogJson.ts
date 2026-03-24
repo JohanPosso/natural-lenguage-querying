@@ -130,7 +130,7 @@ async function main() {
   // ── 1. Conectar a SQL y obtener cubos ──────────────────────────────────────
   log("► Conectando a SQL Server...");
   const pool = await getSqlPool();
-  log("  ✓ Conectado\n");
+  log("  [OK] Conectado\n");
 
   // Cubos
   const cubesRes = await pool.request().query<{
@@ -146,7 +146,7 @@ async function main() {
   log(`► ${cubeRows.length} cubos encontrados en el catálogo SQL.`);
 
   if (!cubeRows.length) {
-    log("\n⚠ No hay cubos en el catálogo. Ejecuta primero: npm run sync-catalog");
+    log("\n[WARN] No hay cubos en el catálogo. Ejecuta primero: npm run sync-catalog");
     process.exit(1);
   }
 
@@ -257,7 +257,7 @@ async function main() {
     }
 
     logProgress("");
-    log(`   ✓ Cubo procesado`);
+    log(`   [OK] Cubo procesado`);
 
     cubesExport.push({
       cube_name: cube.cube_name,

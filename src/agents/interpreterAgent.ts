@@ -54,13 +54,13 @@ Son los FILTROS que el usuario especifica. Cada entidad tiene un tipo:
 
   "fuel"      → tipo de combustible o fuente de energía del vehículo
                  Ejemplos: "eléctrico", "diésel", "gasolina", "híbrido", "GLP", "GNC", "hidrógeno"
-                 ⚠️ CRÍTICO: eléctrico, diésel, gasolina, híbrido son COMBUSTIBLES, NO segmentos.
+                 [WARN] CRÍTICO: eléctrico, diésel, gasolina, híbrido son COMBUSTIBLES, NO segmentos.
                  Corresponden a la dimensión "Fuente de energía" o "Combustible" en SSAS.
                  normalizedHint: capitalizar → "Electrico", "Diésel", "Gasolina", "Híbrido"
 
   "segment"   → categorías o segmentos de producto (forma del vehículo / uso)
                  Ejemplos: "SUV", "Moto Carretera", "berlina", "furgoneta", "pick-up", "motos"
-                 ⚠️ NUNCA pongas aquí tipos de combustible (eléctrico, diésel, híbrido…).
+                 [WARN] NUNCA pongas aquí tipos de combustible (eléctrico, diésel, híbrido…).
                  normalizedHint: capitalizar primera letra de cada palabra → "Moto Carretera", "SUV"
                  IMPORTANTE: si es un término genérico plural ("motos", "coches"), mantenlo tal cual.
                  Si es un nombre específico ("Moto Carretera", "BSUV"), normalízalo exactamente.

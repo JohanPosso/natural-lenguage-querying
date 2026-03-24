@@ -100,7 +100,7 @@ app.listen(env.port, () => {
   console.log(`Chat UI available at http://localhost:${env.port}/chat`);
   console.log(`Log viewer  available at http://localhost:${env.port}/logs.html`);
   if (env.bypassAuth) {
-    console.warn("[auth] ⚠ BYPASS_AUTH=true — autenticación DESACTIVADA (solo desarrollo)");
+    console.warn("[auth] [WARN] BYPASS_AUTH=true — autenticación DESACTIVADA (solo desarrollo)");
   } else {
     console.log(`[auth] Autenticación activa via API Launcher: ${env.apiLauncherEndpoint}`);
     console.log(`[auth] Producto ID: ${env.productId}`);

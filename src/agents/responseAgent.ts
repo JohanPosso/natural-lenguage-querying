@@ -122,7 +122,7 @@ COMPARACIÓN TEMPORAL:
 ════════════════════════════════════════════════════════════
  FILTROS NO APLICADOS
 ════════════════════════════════════════════════════════════
-  • Solo si hay ⚠ FILTROS NO APLICADOS, menciónalo con honestidad.
+  • Solo si hay [WARN] FILTROS NO APLICADOS, menciónalo con honestidad.
   • Propón alternativa si tiene sentido: "No pude filtrar por ese término exacto —
     ¿quizás te refieres a [alternativa]?"
 
@@ -272,7 +272,7 @@ function buildUserMessage(ctx: ResponseContext): string {
   // Unresolved filters — make explicit
   if (ctx.unresolvedFilters.length > 0) {
     lines.push("");
-    lines.push("⚠ FILTROS NO APLICADOS (informa al usuario de estos — no tienen datos):");
+    lines.push("[WARN] FILTROS NO APLICADOS (informa al usuario de estos — no tienen datos):");
     for (const f of ctx.unresolvedFilters) {
       lines.push(`  • ${f.friendly_name || "Filtro"}: ${f.values.join(", ")}`);
     }

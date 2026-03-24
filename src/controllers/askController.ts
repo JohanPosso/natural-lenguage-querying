@@ -781,14 +781,14 @@ async function executeOneCombo(
         appliedLabel = tuples.map((t) => `${t.dimension_friendly}="${t.value_caption}"`).join(", ");
       } else if (appliedCount > 0) {
         const appliedStr = tuples.map((t) => `${t.dimension_friendly}="${t.value_caption}"`).join(", ");
-        appliedLabel = `${appliedStr} (⚠️ filtros de fecha omitidos por incompatibilidad MDX)`;
+        appliedLabel = `${appliedStr} ([WARN] filtros de fecha omitidos por incompatibilidad MDX)`;
       } else {
         appliedLabel = requestedCount > 0
-          ? `total general (⚠️ los filtros originales no pudieron aplicarse en este cubo)`
+          ? `total general ([WARN] los filtros originales no pudieron aplicarse en este cubo)`
           : "sin filtros";
       }
 
-      pLog("  ↳", GREEN, `MDX OK  valor=${value ?? "null"}`, `[${appliedLabel}]`);
+      pLog("  ->", GREEN, `MDX OK  valor=${value ?? "null"}`, `[${appliedLabel}]`);
       pLog("    ", DIM, "MDX", mdx.replace(/\s+/g, " ").slice(0, 160));
 
       await debugLogger.log("ask", "mdx_success", {
@@ -811,7 +811,7 @@ async function executeOneCombo(
       };
     } catch (err) {
       lastError = err as Error;
-      pLog("  ✗", RED, `MDX ERROR`, `[${comboLabel}] ${(err as Error).message.slice(0, 120)}`);
+      pLog("  [X]", RED, `MDX ERROR`, `[${comboLabel}] ${(err as Error).message.slice(0, 120)}`);
       await debugLogger.log("ask", "mdx_error", {
         traceId,
         measure: measure.friendly_name,
@@ -942,8 +942,8 @@ export async function runAskPipeline(
   });
   const t0 = Date.now();
   console.log(`\n${CYAN}${"─".repeat(70)}${RESET}`);
-  pLog("❓", CYAN, "PREGUNTA", `"${prompt}"`);
-  pLog("🔑", DIM, "traceId", traceId);
+  pLog("[Q]", CYAN, "PREGUNTA", `"${prompt}"`);
+  pLog("[TRACE]", DIM, "traceId", traceId);
 
   // ── Detección temprana de preguntas de autodescripción ────────────────────
   // Se hace ANTES del intent extraction para no depender de si el LLM lo clasifica
@@ -985,8 +985,8 @@ export async function runAskPipeline(
   const visibleCubes = manifest.cubes.filter(isCubeVisible);
 
   if (allowedCubes !== null) {
-    pLog("🔒", YELLOW, "Cubos permitidos (Launcher)", `[${allowedCubes.join(", ") || "ninguno"}]`);
-    pLog("👁️ ", BLUE, "Cubos visibles", `${visibleCubes.length} de ${manifest.cubes.length}`);
+    pLog("[AUTH]", YELLOW, "Cubos permitidos (Launcher)", `[${allowedCubes.join(", ") || "ninguno"}]`);
+    pLog("[VISIBLE] ", BLUE, "Cubos visibles", `${visibleCubes.length} de ${manifest.cubes.length}`);
   }
 
   // Sanear el historial de conversación: eliminar referencias a cubos que el usuario
@@ -1015,7 +1015,7 @@ export async function runAskPipeline(
   const jargonResult = normalizeJargon(prompt);
   const normalizedPrompt = jargonResult.normalized;
   if (jargonResult.substitutions.length > 0) {
-    pLog("📖", YELLOW, "Jergas normalizadas",
+    pLog("[JARGON]", YELLOW, "Jergas normalizadas",
       jargonResult.substitutions.map((s) => `"${s.from}" → "${s.to}"`).join(" | "));
     await debugLogger.log("ask", "jargon_normalized", {
       traceId,
@@ -1027,7 +1027,7 @@ export async function runAskPipeline(
   // ─────────────────────────────────────────────────────────────────────────────
 
   // ── Step 1: Agent 1 — Interpreter: extract structured intent from the question ─
-  pLog("🧠", MAGENTA, "Agent 1 (Intérprete): extrayendo intención...");
+  pLog("[INTENT]", MAGENTA, "Agent 1 (Intérprete): extrayendo intención...");
   // Pasar los nombres de los cubos visibles para que el intérprete use preferredCube
   // solo con cubos a los que este usuario tiene acceso real.
   const visibleCubeNames = visibleCubes.map((c) => c.catalog);
@@ -1142,9 +1142,9 @@ export async function runAskPipeline(
     intentDomain: intent.domain
   });
   if (prevCubeName) {
-    pLog("🔄", CYAN, "Contexto conversación", `cubo anterior: "${prevCubeName}"`);
+    pLog("[CTX]", CYAN, "Contexto conversación", `cubo anterior: "${prevCubeName}"`);
   }
-  pLog("📦", BLUE, "Candidatos", candidateCubes.map((c) => c.cubeName).join(" | "));
+  pLog("[CANDIDATES]", BLUE, "Candidatos", candidateCubes.map((c) => c.cubeName).join(" | "));
 
   // If the user asked about a specific brand/cube that isn't in their visible cubes, warn them
   if (intent.preferredCube) {
@@ -1223,11 +1223,11 @@ export async function runAskPipeline(
   }
 
   // ── Step 3: Build catalog context enriched with SSAS hierarchy paths ─────────
-  pLog("🏗️ ", BLUE, "Construyendo catálogo con jerarquías SSAS...");
+  pLog("[BUILD] ", BLUE, "Construyendo catálogo con jerarquías SSAS...");
   const catalogContext = await buildCatalogContextWithHierarchies(candidateCubes, prompt);
 
   // ── Step 4: Agent 2 — Mapper: map intent to exact catalog elements ───────────
-  pLog("🗺️ ", MAGENTA, "Agent 2 (Mapeador): seleccionando cubo, medidas y filtros...");
+  pLog("[MAP] ", MAGENTA, "Agent 2 (Mapeador): seleccionando cubo, medidas y filtros...");
   let selection: LlmSelection;
   try {
     selection = await mapperAgent.map(intent, catalogContext, sanitizedHistory);
@@ -1288,7 +1288,7 @@ export async function runAskPipeline(
   });
 
   if (selection.filters.length < originalFilterCount) {
-    pLog("⚠️", YELLOW, "Filtros inventados eliminados",
+    pLog("[WARN]", YELLOW, "Filtros inventados eliminados",
       `${originalFilterCount - selection.filters.length} filtro(s) sin respaldo en la pregunta fueron descartados`);
     await debugLogger.log("ask", "filters_pruned", {
       traceId,
@@ -1302,15 +1302,15 @@ export async function runAskPipeline(
   // ─────────────────────────────────────────────────────────────────────────────
 
   await debugLogger.log("ask", "llm_selection", { traceId, selection });
-  pLog("✅", GREEN, "Mapeador seleccionó cubo", `"${selection.cube_name}"`);
+  pLog("[OK]", GREEN, "Mapeador seleccionó cubo", `"${selection.cube_name}"`);
   for (const m of selection.measures) {
-    pLog("  📊", GREEN, `Medida`, `${m.mdx_unique_name}  (${m.friendly_name})`);
+    pLog("  [MEASURE]", GREEN, `Medida`, `${m.mdx_unique_name}  (${m.friendly_name})`);
   }
   for (const f of selection.filters ?? []) {
     pLog("  🔍", YELLOW, `Filtro ${f.type}`, `${f.hierarchy_mdx}  →  ${f.values.join(", ")}`);
   }
   if (selection.reasoning) {
-    pLog("  💬", DIM, "Razonamiento", selection.reasoning.slice(0, 120));
+    pLog("  [INFO]", DIM, "Razonamiento", selection.reasoning.slice(0, 120));
   }
 
   // ── Step 5: Resolve cube in manifest (solo entre los cubos visibles del usuario) ─
@@ -1324,7 +1324,7 @@ export async function runAskPipeline(
       error: (err as Error).message
     });
     // Retry with expanded context (all visible cubes)
-    pLog("⚠️ ", YELLOW, "Cubo no encontrado, reintentando con catálogo completo...");
+    pLog("[WARN] ", YELLOW, "Cubo no encontrado, reintentando con catálogo completo...");
     const expandedContext = await buildCatalogContextWithHierarchies(visibleCubes.slice(0, 8), prompt);
     const retryMapping = await mapperAgent.map(intent, expandedContext, sanitizedHistory);
     selectedCube = resolveCube({ ...manifest, cubes: visibleCubes }, retryMapping.cube_name);
@@ -1417,14 +1417,14 @@ export async function runAskPipeline(
   const { groups: resolvedFilterGroups, unresolved: unresolvedFilters, expansions: filterExpansions } =
     await resolveFilters(selectedCube, selection.filters, traceId);
   await debugLogger.log("ask", "resolved_filters", { traceId, groups: resolvedFilterGroups, unresolved: unresolvedFilters });
-  pLog("🔗", BLUE, "Filtros resueltos en SSAS");
+  pLog("[LINK]", BLUE, "Filtros resueltos en SSAS");
   for (const g of resolvedFilterGroups) {
     const members = g.members.map((m) => `${m.value_caption} → ${m.member_unique_name}`).join(" | ");
-    pLog("  ✓", GREEN, g.hierarchy_friendly, members);
+    pLog("  [OK]", GREEN, g.hierarchy_friendly, members);
   }
   if (unresolvedFilters.length > 0) {
     for (const u of unresolvedFilters) {
-      pLog("  ✗", RED, `NO ENCONTRADO: ${u.friendly_name}`, u.values.join(", "));
+      pLog("  [X]", RED, `NO ENCONTRADO: ${u.friendly_name}`, u.values.join(", "));
     }
   }
 
@@ -1455,13 +1455,13 @@ export async function runAskPipeline(
   }
 
   // ── Step 9: Agent 3 — Response: format final answer ────────────────────────
-  pLog("✍️ ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
+  pLog("[WRITE] ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
   const answer = await generateNaturalResponse(prompt, allResults, selection, unresolvedFilters, filterExpansions);
   const primary = allResults[0];
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  pLog("💬", GREEN, "RESPUESTA FINAL", `\n${answer}`);
-  pLog("⏱️ ", CYAN, `Completado en ${elapsed}s`, `— ${allResults.length} resultado(s)`);
+  pLog("[INFO]", GREEN, "RESPUESTA FINAL", `\n${answer}`);
+  pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${allResults.length} resultado(s)`);
   console.log(`${CYAN}${"─".repeat(70)}${RESET}\n`);
 
   await debugLogger.log("ask", "pipeline_success", {
@@ -1499,7 +1499,7 @@ export async function askController(req: Request, res: Response): Promise<Respon
     });
     return res.status(200).json(payload);
   } catch (error) {
-    pLog("💥", RED, "PIPELINE ERROR", (error as Error).message);
+    pLog("[ERROR]", RED, "PIPELINE ERROR", (error as Error).message);
     console.log(`${RED}${"─".repeat(70)}${RESET}\n`);
     await debugLogger.log("ask", "pipeline_error", { error: (error as Error).message });
     return res.status(500).json({

@@ -16,6 +16,7 @@ import { getBearerTokenProvider, type TokenCredential } from "@azure/identity";
 import { buildAzureCredential } from "./azureCredential";
 import axios from "axios";
 import { env } from "../config/env";
+import { globalRulesService } from "./globalRulesService";
 
 const AI_SCOPE = "https://ai.azure.com/.default";
 const RESPONSES_API_VERSION = "2025-11-15-preview";
@@ -214,7 +215,7 @@ async function pushInstructions(agentId: string, instructions: string): Promise<
     instructions,
   } as any);
 
-  console.log(`[agentRegistry] ✓ Instrucciones actualizadas para ${agentId}`);
+  console.log(`[agentRegistry] [OK] Instrucciones actualizadas para ${agentId}`);
 }
 
 /**
@@ -253,6 +254,10 @@ export async function callAgent(
   contextMessages?: Array<{ role: "user" | "assistant"; content: string }>
 ): Promise<string> {
   const { instructions, model } = await loadAgent(agentId, fallbackInstructions);
+  const globalRulesBlock = await globalRulesService.buildPromptBlock();
+  const effectiveInstructions = globalRulesBlock
+    ? `${instructions}\n\n${globalRulesBlock}`
+    : instructions;
 
   const endpoint = env.azureExistingAiProjectEndpoint!.replace(/\/$/, "");
   const url = `${endpoint}/openai/responses?api-version=${RESPONSES_API_VERSION}`;
@@ -274,7 +279,7 @@ export async function callAgent(
     error?: { code: string; message: string };
   }>(
     url,
-    { model, instructions, input: fullInput },
+    { model, instructions: effectiveInstructions, input: fullInput },
     {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       timeout: env.requestTimeoutMs,
@@ -321,7 +326,7 @@ export async function trainAgents(): Promise<void> {
   await pushInstructions(env.azureWorkerAgentId, workerInstr);
 
   _cache.clear();
-  console.log("[agentRegistry] ✅ Ambos agentes entrenados.");
+  console.log("[agentRegistry] [OK] Ambos agentes entrenados.");
 }
 
 /** Invalida la caché de instrucciones (útil si se actualizan desde el portal). */

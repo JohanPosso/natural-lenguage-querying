@@ -11,12 +11,12 @@ async function run(): Promise<void> {
   console.log("=== Entrenamiento de agentes ===\n");
   console.log("Subiendo instrucciones a Azure AI Foundry...\n");
   await trainAgents();
-  console.log("\n✅ Listo. Ambos agentes tienen sus instrucciones actualizadas.");
+  console.log("\n[OK] Listo. Ambos agentes tienen sus instrucciones actualizadas.");
   console.log("   - agent-dev360          → Planificador / Intérprete NLU");
   console.log("   - agent-dev360-Worker-1 → Worker / Redactor de respuestas OLAP");
 }
 
 void run().catch((err) => {
-  console.error("❌ Error durante el entrenamiento:", (err as Error).message);
+  console.error("[ERROR] Error durante el entrenamiento:", (err as Error).message);
   process.exit(1);
 });

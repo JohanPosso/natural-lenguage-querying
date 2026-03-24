@@ -39,7 +39,7 @@ async function main() {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log("");
     console.log("=".repeat(60));
-    console.log(`✅ Sincronización completada en ${elapsed}s`);
+    console.log(`[OK] Sincronización completada en ${elapsed}s`);
     console.log(`   Cubos:       ${result.cubes}`);
     console.log(`   Miembros:    ${result.members}`);
     console.log(`   Jerarquías:  ${result.hierarchies}`);
@@ -47,7 +47,7 @@ async function main() {
     process.exit(0);
   } catch (err) {
     console.error("");
-    console.error("❌ Error durante la sincronización:");
+    console.error("[ERROR] Error durante la sincronización:");
     console.error((err as Error).message);
     process.exit(1);
   }

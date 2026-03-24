@@ -25,10 +25,10 @@ async function run(): Promise<void> {
   let plan;
   try {
     plan = await planQuery(question);
-    console.log("✅ Plan generado:");
+    console.log("[OK] Plan generado:");
     console.log(JSON.stringify(plan, null, 2));
   } catch (err) {
-    console.error("❌ Error en Planificador:", (err as Error).message);
+    console.error("[ERROR] Error en Planificador:", (err as Error).message);
     process.exit(1);
   }
 
@@ -52,14 +52,14 @@ async function run(): Promise<void> {
       results: fakeResults,
     });
 
-    console.log("✅ Respuesta generada:");
+    console.log("[OK] Respuesta generada:");
     console.log(answer);
   } catch (err) {
-    console.error("❌ Error en Worker:", (err as Error).message);
+    console.error("[ERROR] Error en Worker:", (err as Error).message);
     process.exit(1);
   }
 
-  console.log("\n✅ Ambos agentes funcionan correctamente.");
+  console.log("\n[OK] Ambos agentes funcionan correctamente.");
 }
 
 void run().catch((err) => {

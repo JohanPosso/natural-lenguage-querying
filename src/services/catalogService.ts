@@ -400,7 +400,7 @@ class CatalogService {
         }
 
         totalCubes++;
-        console.log(`[catalogService] ✓ ${catalog}/${xmlaCubeName} — ${measureRows.length} medidas, ${hierRows.length} jerarquías`);
+        console.log(`[catalogService] [OK] ${catalog}/${xmlaCubeName} — ${measureRows.length} medidas, ${hierRows.length} jerarquías`);
       }
     }
 

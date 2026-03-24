@@ -4,7 +4,7 @@
  * Estrategia de autenticación (en orden de prioridad):
  *
  *  1. ClientSecretCredential  — si AZURE_CLIENT_ID + AZURE_CLIENT_SECRET están en .env
- *                               ✅ Funciona en servidores on-premise Windows sin az/VS Code.
+ *                               [OK] Funciona en servidores on-premise Windows sin az/VS Code.
  *
  *  2. DefaultAzureCredential  — fallback para entornos de desarrollador (az CLI, VS Code,
  *                               Managed Identity en Azure, PowerShell Az…).

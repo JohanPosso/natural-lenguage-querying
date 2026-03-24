@@ -14,6 +14,50 @@ export type GlobalRule = {
 
 class GlobalRulesService {
   private initialized = false;
+  private seeded = false;
+
+  private readonly defaultRules: Array<{
+    name: string;
+    content: string;
+    priority: number;
+    is_active: boolean;
+  }> = [
+    {
+      name: "No inventar datos ni filtros",
+      content:
+        "Nunca inventar números, medidas, filtros, jerarquías, cubos o miembros que no provengan del catálogo y de los resultados reales.",
+      priority: 10,
+      is_active: true
+    },
+    {
+      name: "Responder en español claro",
+      content:
+        "Responder siempre en español claro y profesional, con estilo conversacional, evitando tecnicismos internos (MDX/SSAS/SQL) en la respuesta al usuario final.",
+      priority: 20,
+      is_active: true
+    },
+    {
+      name: "Respetar permisos del usuario",
+      content:
+        "Solo usar cubos permitidos para el usuario actual. Si el usuario pide un cubo no permitido, informar claramente y ofrecer los cubos disponibles.",
+      priority: 30,
+      is_active: true
+    },
+    {
+      name: "Filtros solo desde intención",
+      content:
+        "Aplicar filtros únicamente cuando estén explícitos o sustentados por la intención y el texto del usuario; nunca arrastrar filtros inventados de ejemplos.",
+      priority: 40,
+      is_active: true
+    },
+    {
+      name: "Preguntas meta de cubo",
+      content:
+        "Si la pregunta es meta sobre un cubo específico (por ejemplo: 'qué me puedes decir del cubo X'), priorizar describir ese cubo y no responder con descripción genérica del asistente.",
+      priority: 50,
+      is_active: true
+    }
+  ];
 
   private async ensureTable(pool: ConnectionPool): Promise<void> {
     if (this.initialized) return;
@@ -41,7 +85,36 @@ class GlobalRulesService {
   private async getReadyPool(): Promise<ConnectionPool> {
     const pool = await getSqlPool();
     await this.ensureTable(pool);
+    await this.ensureSeedData(pool);
     return pool;
+  }
+
+  private async ensureSeedData(pool: ConnectionPool): Promise<void> {
+    if (this.seeded) return;
+
+    const countResult = await pool.request().query(`
+      SELECT COUNT(1) AS total FROM dbo.global_rules;
+    `);
+    const total = Number(countResult.recordset?.[0]?.total ?? 0);
+
+    if (total === 0) {
+      for (const rule of this.defaultRules) {
+        await pool
+          .request()
+          .input("id", randomUUID())
+          .input("name", rule.name)
+          .input("content", rule.content)
+          .input("isActive", rule.is_active)
+          .input("priority", rule.priority)
+          .query(`
+            INSERT INTO dbo.global_rules (id, name, content, is_active, priority, updated_at)
+            VALUES (@id, @name, @content, @isActive, @priority, SYSUTCDATETIME());
+          `);
+      }
+      console.log(`[globalRules] Seed inicial aplicado (${this.defaultRules.length} reglas).`);
+    }
+
+    this.seeded = true;
   }
 
   async list(limit = 200): Promise<GlobalRule[]> {
@@ -167,6 +240,43 @@ class GlobalRulesService {
         SELECT @@ROWCOUNT AS affected;
       `);
     return Number(result.recordset?.[0]?.affected ?? 0) > 0;
+  }
+
+  async listActive(limit = 200): Promise<GlobalRule[]> {
+    const pool = await this.getReadyPool();
+    const safeLimit = Math.min(Math.max(limit, 1), 1000);
+    const result = await pool
+      .request()
+      .input("limit", safeLimit)
+      .query(`
+        SELECT TOP (@limit)
+          id, name, content, is_active, priority, created_at, updated_at
+        FROM dbo.global_rules
+        WHERE is_active = 1
+        ORDER BY priority ASC, updated_at DESC;
+      `);
+
+    return result.recordset.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      content: String(row.content),
+      is_active: Boolean(row.is_active),
+      priority: Number(row.priority),
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    }));
+  }
+
+  async buildPromptBlock(): Promise<string> {
+    const activeRules = await this.listActive(500);
+    if (activeRules.length === 0) return "";
+
+    const lines = [
+      "=== REGLAS GLOBALES ACTIVAS (desde base de datos) ===",
+      ...activeRules.map((r, i) => `${i + 1}. [${r.name}] ${r.content}`),
+      "======================================================"
+    ];
+    return lines.join("\n");
   }
 }
 

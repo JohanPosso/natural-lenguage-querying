@@ -14,6 +14,7 @@
 import { llmService } from "../services/llmService";
 import type { ChatMessage } from "../services/llmService";
 import type { QueryIntent, CatalogMapping, ConversationTurn } from "./types";
+import { globalRulesService } from "../services/globalRulesService";
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ REGLAS POR TIPO DE ENTIDAD:
   • Pon el valor TAL COMO ESTÁ en el intent (incluyendo términos genéricos como "motos" o "SUV").
   • El sistema de resolución hará el fuzzy-matching automáticamente.
   • NO intentes adivinar o transformar el valor del segmento.
-  • ⚠️ IMPORTANTE: SUV, berlina, moto, furgoneta, pick-up → son SEGMENTOS.
+  • [WARN] IMPORTANTE: SUV, berlina, moto, furgoneta, pick-up → son SEGMENTOS.
     Eléctrico, diésel, gasolina, híbrido → son COMBUSTIBLES (ver tipo "fuel" abajo). NO los mezcles.
 
   fuel (tipo de combustible/energía: eléctrico, diésel, gasolina, híbrido, GLP, GNC, hidrógeno)
@@ -182,6 +183,7 @@ export async function map(
   const intentBlock   = buildIntentBlock(intent);
   const historyBlock  = buildHistoryBlock(conversationHistory);
   const examplesBlock = buildExamples();
+  const globalRulesBlock = await globalRulesService.buildPromptBlock();
 
   const userMessage = `${intentBlock}${historyBlock}
 
@@ -194,7 +196,7 @@ ${catalogContext}
 Produce el mapeo JSON:`;
 
   const messages: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: globalRulesBlock ? `${SYSTEM_PROMPT}\n\n${globalRulesBlock}` : SYSTEM_PROMPT },
     { role: "user", content: userMessage }
   ];
 
@@ -246,7 +248,7 @@ function buildIntentBlock(intent: QueryIntent): string {
     for (const [type, vals] of Object.entries(byType)) {
       let typeNote = "";
       if (type === "fuel") {
-        typeNote = " ⚠️ COMBUSTIBLE/ENERGÍA → busca jerarquía 'Fuente de energía', 'Combustible' o 'Tipo de Combustible'. NUNCA uses [Segmento]";
+        typeNote = " [WARN] COMBUSTIBLE/ENERGÍA → busca jerarquía 'Fuente de energía', 'Combustible' o 'Tipo de Combustible'. NUNCA uses [Segmento]";
       }
       lines.push(`  [${type}]${typeNote}: ${vals.join(", ")}`);
     }
@@ -265,7 +267,7 @@ function buildIntentBlock(intent: QueryIntent): string {
     lines.push("Mes: NO ESPECIFICADO — NO añadas filtro de mes.");
   }
   if (intent.preferredCube)     lines.push(`Cubo preferido: "${intent.preferredCube}"`);
-  if (intent.isFollowUp)        lines.push("⚠ SEGUIMIENTO: mantener el mismo cubo de la conversación.");
+  if (intent.isFollowUp)        lines.push("[WARN] SEGUIMIENTO: mantener el mismo cubo de la conversación.");
 
   lines.push("============================================");
   return lines.join("\n");
@@ -286,14 +288,14 @@ function buildExamples(): string {
 
 EJEMPLO A — Sin filtros (el usuario NO especificó año, mes ni provincia):
   Intent: métricas=["total mercado"], entities=[], timeFilters={}
-  ✅ CORRECTO:
+  [OK] CORRECTO:
   {
     "reasoning": "Consulta de total mercado sin filtros, cubo de matriculaciones generales",
     "cube_name": "Matriculaciones_Matriculaciones",
     "measures": [{ "technical_name": "Total Mercado", "friendly_name": "Total Mercado", "mdx_unique_name": "[Measures].[Total Mercado]" }],
     "filters": []
   }
-  ❌ INCORRECTO (inventar filtros que nadie pidió):
+  [ERROR] INCORRECTO (inventar filtros que nadie pidió):
   {
     "filters": [
       { "type": "year", "hierarchy_mdx": "...", "values": ["2025"] },
