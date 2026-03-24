@@ -3,17 +3,17 @@
  *
  * Selecciona automáticamente la mejor estrategia según el entorno:
  *
- *  AZURE_AUTH_METHOD=device_code       → DeviceCodeCredential
+ *  AZURE_AUTH_METHOD=device_code       -> DeviceCodeCredential
  *    Al arrancar el servidor imprime en consola:
  *    "To sign in, use a web browser to open https://microsoft.com/devicelogin and enter code XXXXXXXX"
  *    El usuario abre esa URL en cualquier navegador (puede ser desde otro PC), introduce el código
  *    y el servidor queda autenticado. No requiere internet en el servidor, solo acceso a login.microsoftonline.com.
  *
- *  AZURE_CLIENT_ID + AZURE_CLIENT_SECRET → ClientSecretCredential (Service Principal)
+ *  AZURE_CLIENT_ID + AZURE_CLIENT_SECRET -> ClientSecretCredential (Service Principal)
  *    Para servidores on-premise sin az CLI, VS Code ni acceso a internet general.
  *    Requiere un App Registration en el mismo tenant que el recurso Azure AI.
  *
- *  (ninguna de las anteriores) → DefaultAzureCredential
+ *  (ninguna de las anteriores) -> DefaultAzureCredential
  *    Para entornos de desarrollador con az CLI, VS Code o Managed Identity en Azure.
  */
 
@@ -40,14 +40,14 @@ export function buildAzureCredential(): TokenCredential {
     _credential = new DeviceCodeCredential({
       tenantId: azureTenantId,
       userPromptCallback: (info) => {
-        console.log("\n╔══════════════════════════════════════════════════════╗");
+        console.log("\n╔======================================================╗");
         console.log("║         AUTENTICACIÓN AZURE REQUERIDA                ║");
-        console.log("╠══════════════════════════════════════════════════════╣");
+        console.log("╠======================================================╣");
         console.log(`║  1. Abre en cualquier navegador:                     ║`);
         console.log(`║     https://microsoft.com/devicelogin                ║`);
         console.log(`║  2. Introduce el código: ${info.userCode.padEnd(27)}║`);
         console.log(`║  3. Inicia sesión con tu cuenta corporativa           ║`);
-        console.log("╚══════════════════════════════════════════════════════╝\n");
+        console.log("╚======================================================╝\n");
       },
     });
     return _credential;
@@ -60,7 +60,7 @@ export function buildAzureCredential(): TokenCredential {
     return _credential;
   }
 
-  // 3. DefaultAzureCredential — entorno de desarrollador (az CLI, VS Code, Managed Identity…)
+  // 3. DefaultAzureCredential — entorno de desarrollador (az CLI, VS Code, Managed Identity...)
   console.log("[AzureAI] Usando DefaultAzureCredential (az CLI / VS Code / Managed Identity)");
   _credential = new DefaultAzureCredential({
     tenantId: azureTenantId,

@@ -16,7 +16,7 @@ import type { ChatMessage } from "../services/llmService";
 import type { QueryIntent, CatalogMapping, ConversationTurn } from "./types";
 import { globalRulesService } from "../services/globalRulesService";
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// -- System prompt -------------------------------------------------------------
 
 const SYSTEM_PROMPT = `
 Eres un CARTÓGRAFO EXPERTO de catálogos OLAP (SQL Server Analysis Services — SSAS).
@@ -29,14 +29,14 @@ Solo lees el catálogo y seleccionas los elementos correctos.
 
 TU ÚNICA RESPONSABILIDAD: producir un JSON con nombres técnicos 100% exactos del catálogo.
 
-════════════════════════════════════════════════════════════
+============================================================
  PARTE 1 — SELECCIÓN DEL CUBO (cube_name)
-════════════════════════════════════════════════════════════
+============================================================
 Debes elegir UN SOLO cubo. Criterios de selección en orden de prioridad:
 
-  1. Si el intent tiene "preferredCube" → prioriza el cubo cuyo nombre o catálogo
+  1. Si el intent tiene "preferredCube" -> prioriza el cubo cuyo nombre o catálogo
      se parezca más a ese valor.
-  2. Si el cubo anterior de la conversación está disponible → úsalo (continuidad).
+  2. Si el cubo anterior de la conversación está disponible -> úsalo (continuidad).
   3. Busca el cubo que contenga TODAS las medidas pedidas en "primaryMetrics".
      Si ningún cubo tiene todas, elige el que tenga más.
   4. En caso de empate, elige el cubo más específico (más measures relevantes).
@@ -44,14 +44,14 @@ Debes elegir UN SOLO cubo. Criterios de selección en orden de prioridad:
 Regla absoluta: el cube_name DEBE ser uno de los que aparecen en el catálogo.
                NUNCA escribas un nombre que no estés copiando del catálogo.
 
-════════════════════════════════════════════════════════════
+============================================================
  PARTE 2 — SELECCIÓN DE MEDIDAS (measures[])
-════════════════════════════════════════════════════════════
+============================================================
 Para cada métrica del intent, busca la medida en el cubo elegido.
 
 Cómo leer el catálogo:
-  Líneas del tipo: "  [Measures].[Matriculaciones] → "Matriculaciones""
-  mdx_unique_name = "[Measures].[Matriculaciones]"  ← copia EXACTAMENTE
+  Líneas del tipo: "  [Measures].[Matriculaciones] -> "Matriculaciones""
+  mdx_unique_name = "[Measures].[Matriculaciones]"  <- copia EXACTAMENTE
   friendly_name   = "Matriculaciones"
   technical_name  = el identificador interno (si no aparece, usa el mdx_unique_name)
 
@@ -62,109 +62,109 @@ Reglas:
   - Selecciona máximo 5 medidas (no más, para no saturar la consulta).
   - PRIORIDAD MARCA: Si el intent tiene una entidad de tipo "brand" cuyo nombre coincide con
     parte del nombre de una medida, selecciona la medida específica de esa marca.
-    Ejemplo: brand="Nissan" → preferir "Matriculaciones Nissan" sobre "Matriculaciones" genérica.
-    Ejemplo: brand="Ford" → preferir "Matriculaciones Ford" sobre "Matriculaciones" genérica.
+    Ejemplo: brand="Nissan" -> preferir "Matriculaciones Nissan" sobre "Matriculaciones" genérica.
+    Ejemplo: brand="Ford" -> preferir "Matriculaciones Ford" sobre "Matriculaciones" genérica.
 
-════════════════════════════════════════════════════════════
+============================================================
  PARTE 3 — SELECCIÓN DE FILTROS (filters[])
-════════════════════════════════════════════════════════════
+============================================================
 Para cada entidad del intent y para los filtros temporales, busca la jerarquía correcta.
 
 ESTRUCTURA DE FILTRO:
   {
     "type": "year" | "month" | "dimension",
-    "hierarchy_mdx": "[Dimension].[Jerarquía]",   ← copia EXACTAMENTE del catálogo
+    "hierarchy_mdx": "[Dimension].[Jerarquía]",   <- copia EXACTAMENTE del catálogo
     "friendly_name": "Nombre legible",
-    "values": ["valor1", "valor2"]                ← los valores que dijo el usuario
+    "values": ["valor1", "valor2"]                <- los valores que dijo el usuario
   }
 
 CÓMO LEER LAS JERARQUÍAS DEL CATÁLOGO:
   Líneas del tipo: 'hierarchy_mdx: "[-MT Territorios].[Provincia]"  caption: "Provincia"'
-  hierarchy_mdx = "[-MT Territorios].[Provincia]"   ← copia EXACTAMENTE
+  hierarchy_mdx = "[-MT Territorios].[Provincia]"   <- copia EXACTAMENTE
 
 REGLAS POR TIPO DE ENTIDAD:
 
   location (provincias españolas como Madrid, Barcelona, etc.)
-  ─────────────────────────────────────────────────────────────
-  • Busca la jerarquía "Provincia" (ej: "[-MT Territorios].[Provincia]").
-  • NUNCA uses "Municipio" para nombres de provincias. Solo usa Municipio
+  -------------------------------------------------------------
+  - Busca la jerarquía "Provincia" (ej: "[-MT Territorios].[Provincia]").
+  - NUNCA uses "Municipio" para nombres de provincias. Solo usa Municipio
     si el usuario dice explícitamente "ciudad" o "municipio".
-  • Los valores van en MAYÚSCULAS: "MADRID", "BARCELONA", "SEVILLA".
-  • Si el usuario menciona una comunidad autónoma (Cataluña, País Vasco, Andalucía),
+  - Los valores van en MAYÚSCULAS: "MADRID", "BARCELONA", "SEVILLA".
+  - Si el usuario menciona una comunidad autónoma (Cataluña, País Vasco, Andalucía),
     busca jerarquía de CCAA o Comunidad Autónoma.
 
   segment (categorías de producto como SUV, motos, berlina)
-  ──────────────────────────────────────────────────────────
-  • Busca la jerarquía de "Segmento" o "Segmento Descripción".
-  • Pon el valor TAL COMO ESTÁ en el intent (incluyendo términos genéricos como "motos" o "SUV").
-  • El sistema de resolución hará el fuzzy-matching automáticamente.
-  • NO intentes adivinar o transformar el valor del segmento.
-  • [WARN] IMPORTANTE: SUV, berlina, moto, furgoneta, pick-up → son SEGMENTOS.
-    Eléctrico, diésel, gasolina, híbrido → son COMBUSTIBLES (ver tipo "fuel" abajo). NO los mezcles.
+  ----------------------------------------------------------
+  - Busca la jerarquía de "Segmento" o "Segmento Descripción".
+  - Pon el valor TAL COMO ESTÁ en el intent (incluyendo términos genéricos como "motos" o "SUV").
+  - El sistema de resolución hará el fuzzy-matching automáticamente.
+  - NO intentes adivinar o transformar el valor del segmento.
+  - [WARN] IMPORTANTE: SUV, berlina, moto, furgoneta, pick-up -> son SEGMENTOS.
+    Eléctrico, diésel, gasolina, híbrido -> son COMBUSTIBLES (ver tipo "fuel" abajo). NO los mezcles.
 
   fuel (tipo de combustible/energía: eléctrico, diésel, gasolina, híbrido, GLP, GNC, hidrógeno)
-  ────────────────────────────────────────────────────────────────────────────────────────────
-  • NUNCA uses la dimensión [Segmento] para tipos de combustible.
-  • Busca la jerarquía "Fuente de energía", "Combustible" o similar (ej: "[Fuente de energía].[Fuente de energía]",
+  --------------------------------------------------------------------------------------------
+  - NUNCA uses la dimensión [Segmento] para tipos de combustible.
+  - Busca la jerarquía "Fuente de energía", "Combustible" o similar (ej: "[Fuente de energía].[Fuente de energía]",
     "[Combustible].[Combustible]", "[Fuente de Energía].[Fuente de Energía]").
-  • Pon el valor capitalizado tal cual: "Electrico", "Híbrido", "Diésel", "Gasolina".
-  • El sistema de resolución hará fuzzy-matching para encontrar el valor exacto en SSAS.
+  - Pon el valor capitalizado tal cual: "Electrico", "Híbrido", "Diésel", "Gasolina".
+  - El sistema de resolución hará fuzzy-matching para encontrar el valor exacto en SSAS.
 
   temporal — year
-  ────────────────
-  • type = "year"
-  • Busca la jerarquía de AÑO (ej: "[Fecha].[Año]").
-  • Valor: año con 4 dígitos como string: "2025".
+  ----------------
+  - type = "year"
+  - Busca la jerarquía de AÑO (ej: "[Fecha].[Año]").
+  - Valor: año con 4 dígitos como string: "2025".
 
   temporal — month
-  ─────────────────
-  • type = "month"
-  • Busca la jerarquía de MES (ej: "[Fecha].[Mes]").
-  • Valor: nombre del mes en español capitalizado: "Enero", "Febrero" etc.
+  -----------------
+  - type = "month"
+  - Busca la jerarquía de MES (ej: "[Fecha].[Mes]").
+  - Valor: nombre del mes en español capitalizado: "Enero", "Febrero" etc.
 
   brand / product
-  ────────────────
-  • PRIMERO: busca si existe una medida con el nombre de la marca (ej: "Matriculaciones Ford").
-    Si existe → selecciona esa medida en lugar de añadir un filtro.
-  • SEGUNDO: si no existe medida con nombre de marca, busca jerarquía de Marca/Fabricante/Modelo
+  ----------------
+  - PRIMERO: busca si existe una medida con el nombre de la marca (ej: "Matriculaciones Ford").
+    Si existe -> selecciona esa medida en lugar de añadir un filtro.
+  - SEGUNDO: si no existe medida con nombre de marca, busca jerarquía de Marca/Fabricante/Modelo
     (ej: "[Marca].[Marca]", "[-MT Marca].[Marca]") y aplica el nombre de la marca como filtro.
     El sistema resolverá el valor exacto en SSAS automáticamente.
-  • CRÍTICO: una entidad de marca NO significa que necesitas un cubo específico de esa marca.
+  - CRÍTICO: una entidad de marca NO significa que necesitas un cubo específico de esa marca.
     Los cubos de mercado general (ej: "Matriculaciones") tienen datos de TODAS las marcas
     disponibles como valores de la dimensión Marca. Usa el cubo más relevante disponible.
 
   other
-  ──────
-  • Busca cualquier jerarquía cuyo caption sea semánticamente similar a la entidad.
-  • Si no encuentras nada, NO incluyas ese filtro.
+  ------
+  - Busca cualquier jerarquía cuyo caption sea semánticamente similar a la entidad.
+  - Si no encuentras nada, NO incluyas ese filtro.
 
 REGLAS ADICIONALES:
-  • Si hay múltiples valores para la misma jerarquía (ej: Madrid y Valencia),
+  - Si hay múltiples valores para la misma jerarquía (ej: Madrid y Valencia),
     ponlos TODOS en el mismo filtro: "values": ["MADRID", "VALENCIA"].
-  • NO generes dos filtros para la misma jerarquía.
-  • Solo añade filtros que tienen correspondencia en el catálogo.
-  • Si el catálogo tiene jerarquías para año Y mes, añade ambas cuando corresponda.
+  - NO generes dos filtros para la misma jerarquía.
+  - Solo añade filtros que tienen correspondencia en el catálogo.
+  - Si el catálogo tiene jerarquías para año Y mes, añade ambas cuando corresponda.
 
-════════════════════════════════════════════════════════════
+============================================================
  REGLA CRÍTICA SOBRE FILTROS — LEE ESTO ANTES DE TODO
-════════════════════════════════════════════════════════════
+============================================================
 Los filtros SOLO pueden originarse de lo que el usuario EXPLÍCITAMENTE pidió.
 Comprueba el bloque "INTENCIÓN DE CONSULTA" antes de añadir cualquier filtro:
 
-  • Si "Filtros de dimensión solicitados: NINGUNO" → NO añadas filtros de provincia,
+  - Si "Filtros de dimensión solicitados: NINGUNO" -> NO añadas filtros de provincia,
     segmento, marca ni ninguna otra dimensión (filters de tipo "dimension").
-  • Si el año dice "NO ESPECIFICADO" → NO añadas filtro de año (type="year").
-  • Si el mes dice "NO ESPECIFICADO" → NO añadas filtro de mes (type="month").
-  • Si el año dice "AÑADIR filtro de año obligatoriamente" → SÍ debes añadir el filtro de año.
-  • Si el mes dice "AÑADIR filtro de mes obligatoriamente" → SÍ debes añadir el filtro de mes.
+  - Si el año dice "NO ESPECIFICADO" -> NO añadas filtro de año (type="year").
+  - Si el mes dice "NO ESPECIFICADO" -> NO añadas filtro de mes (type="month").
+  - Si el año dice "AÑADIR filtro de año obligatoriamente" -> SÍ debes añadir el filtro de año.
+  - Si el mes dice "AÑADIR filtro de mes obligatoriamente" -> SÍ debes añadir el filtro de mes.
 
 NUNCA JAMÁS añadas filtros que no estén explícitamente en la intención de consulta.
 No uses valores de los EJEMPLOS como si fueran filtros reales. Los ejemplos solo
 ilustran el formato, no los datos a usar.
 
-════════════════════════════════════════════════════════════
+============================================================
  REGLAS ABSOLUTAS (nunca violar)
-════════════════════════════════════════════════════════════
+============================================================
 1. hierarchy_mdx y mdx_unique_name DEBEN ser copiados EXACTAMENTE del catálogo.
 2. cube_name DEBE ser uno de los nombres del catálogo.
 3. NUNCA inventes jerarquías, medidas o cubos que no aparezcan en el catálogo.
@@ -173,7 +173,7 @@ ilustran el formato, no los datos a usar.
 6. NUNCA copies valores de los ejemplos como si fueran valores reales del usuario.
 `.trim();
 
-// ── Agent function ─────────────────────────────────────────────────────────────
+// -- Agent function -------------------------------------------------------------
 
 export async function map(
   intent: QueryIntent,
@@ -222,7 +222,7 @@ Produce el mapeo JSON:`;
 
   mapping.filters = Array.isArray(mapping.filters) ? mapping.filters : [];
 
-  console.log(`[Agent2:Mapeador] →`, {
+  console.log(`[Agent2:Mapeador] ->`, {
     cube:     mapping.cube_name,
     measures: mapping.measures.map((m) => m.mdx_unique_name),
     filters:  mapping.filters.map((f) => `${f.hierarchy_mdx}=[${f.values.join(",")}]`)
@@ -231,7 +231,7 @@ Produce el mapeo JSON:`;
   return mapping;
 }
 
-// ── Builders ────────────────────────────────────────────────────────────────────
+// -- Builders --------------------------------------------------------------------
 
 function buildIntentBlock(intent: QueryIntent): string {
   const lines: string[] = ["=== INTENCIÓN DE CONSULTA (del Agente 1) ==="];
@@ -242,13 +242,13 @@ function buildIntentBlock(intent: QueryIntent): string {
     lines.push("Filtros solicitados:");
     const byType: Record<string, string[]> = {};
     for (const e of intent.entities) {
-      const hint = e.normalizedHint ? ` → buscar como "${e.normalizedHint}"` : "";
+      const hint = e.normalizedHint ? ` -> buscar como "${e.normalizedHint}"` : "";
       (byType[e.type] = byType[e.type] ?? []).push(`"${e.rawValue}"${hint}`);
     }
     for (const [type, vals] of Object.entries(byType)) {
       let typeNote = "";
       if (type === "fuel") {
-        typeNote = " [WARN] COMBUSTIBLE/ENERGÍA → busca jerarquía 'Fuente de energía', 'Combustible' o 'Tipo de Combustible'. NUNCA uses [Segmento]";
+        typeNote = " [WARN] COMBUSTIBLE/ENERGÍA -> busca jerarquía 'Fuente de energía', 'Combustible' o 'Tipo de Combustible'. NUNCA uses [Segmento]";
       }
       lines.push(`  [${type}]${typeNote}: ${vals.join(", ")}`);
     }
@@ -257,12 +257,12 @@ function buildIntentBlock(intent: QueryIntent): string {
   }
 
   if (intent.timeFilters.year)  {
-    lines.push(`Año:  ${intent.timeFilters.year}  ← AÑADIR filtro de año obligatoriamente`);
+    lines.push(`Año:  ${intent.timeFilters.year}  <- AÑADIR filtro de año obligatoriamente`);
   } else {
     lines.push("Año: NO ESPECIFICADO — NO añadas filtro de año.");
   }
   if (intent.timeFilters.month) {
-    lines.push(`Mes:  ${intent.timeFilters.month}  ← AÑADIR filtro de mes obligatoriamente`);
+    lines.push(`Mes:  ${intent.timeFilters.month}  <- AÑADIR filtro de mes obligatoriamente`);
   } else {
     lines.push("Mes: NO ESPECIFICADO — NO añadas filtro de mes.");
   }
@@ -315,7 +315,7 @@ EJEMPLO B — Con año solamente (sin mes ni provincia):
   }
 
 EJEMPLO C — Con provincia y año:
-  Intent: métricas=["matriculaciones"], entities=[location:"<ciudad>"→<CIUDAD>], timeFilters={"year":"<año>","month":"<mes>"}
+  Intent: métricas=["matriculaciones"], entities=[location:"<ciudad>"-><CIUDAD>], timeFilters={"year":"<año>","month":"<mes>"}
   {
     "reasoning": "...",
     "cube_name": "<cubo del catálogo>",

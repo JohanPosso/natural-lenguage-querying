@@ -128,7 +128,7 @@ async function callResponsesApi(
   throw new Error("Responses API returned no text output.");
 }
 
-// ── Public types ──────────────────────────────────────────────────────────────
+// -- Public types --------------------------------------------------------------
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
@@ -141,7 +141,7 @@ export type CompletionOptions = {
   jsonMode?: boolean;
 };
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
+// -- Internal helpers ----------------------------------------------------------
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 8000;

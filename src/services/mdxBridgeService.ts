@@ -28,7 +28,7 @@ class MdxBridgeService {
    */
   private memberCache = new Map<string, Array<Record<string, string>>>();
 
-  // ── XMLA internals ──────────────────────────────────────────────────────────
+  // -- XMLA internals ----------------------------------------------------------
 
   private executeEnvelope(mdx: string, catalog: string): string {
     return [
@@ -114,7 +114,7 @@ class MdxBridgeService {
     return rows;
   }
 
-  // ── API pública ─────────────────────────────────────────────────────────────
+  // -- API pública -------------------------------------------------------------
 
   /** Normaliza un string para comparación: elimina acentos, minúsculas, trim */
   private norm(s: string): string {
@@ -126,7 +126,7 @@ class MdxBridgeService {
    * Estrategia de scoring:
    *   20 pts — match exacto
    *   10 pts — caption contiene el término buscado
-   *    8 pts — caption empieza por el término (útil para singulares: "Moto" → "Moto Carretera")
+   *    8 pts — caption empieza por el término (útil para singulares: "Moto" -> "Moto Carretera")
    *    6 pts — término contiene la caption (mínimo 3 chars para evitar falsos positivos)
    */
   async findBestMemberByCaption(
@@ -171,7 +171,7 @@ class MdxBridgeService {
 
   /**
    * Busca TODOS los miembros cuya caption empieza por el prefijo dado.
-   * Útil para términos en plural/genérico: "motos" → ["Moto Carretera", "Moto Campo", "Moto Scooter"].
+   * Útil para términos en plural/genérico: "motos" -> ["Moto Carretera", "Moto Campo", "Moto Scooter"].
    * El prefijo se deduce strippeando la 's' final si el término no encontró match exacto.
    */
   async findMembersWithPrefix(
@@ -210,7 +210,7 @@ class MdxBridgeService {
 
   /**
    * Busca TODOS los miembros cuya caption CONTIENE el término dado.
-   * Útil para términos que son sufijos de categoría: "SUV" → ASUV, BSUV, CSUV, etc.
+   * Útil para términos que son sufijos de categoría: "SUV" -> ASUV, BSUV, CSUV, etc.
    * Solo se activa cuando el término tiene al menos 3 caracteres.
    *
    * @returns Array de miembros encontrados, sin duplicados

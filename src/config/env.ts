@@ -52,20 +52,20 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 30_000),
   
-  // ── CORS ─────────────────────────────────────────────────────────────────
+  // -- CORS -----------------------------------------------------------------
   // Lista separada por comas con los orígenes permitidos para el frontend.
   // Ej:
   //   CORS_ALLOWED_ORIGINS=http://localhost:5173,http://mi-dominio.com
   // Usar '*' para permitir cualquier origen (útil para dev).
   corsAllowedOrigins: process.env.CORS_ALLOWED_ORIGINS ?? "*",
 
-  // ── Autenticación API Launcher ────────────────────────────────────────────
+  // -- Autenticación API Launcher --------------------------------------------
   apiLauncherEndpoint: process.env.API_LAUNCHER_ENDPOINT ?? "",
   productId: process.env.PRODUCT_ID ?? "",
   bypassAuth: process.env.BYPASS_AUTH === "true",
   devTestToken: process.env.DEV_TEST_TOKEN ?? "",
 
-  // ── Base de datos SQL Server (chat persistence) ───────────────────────────
+  // -- Base de datos SQL Server (chat persistence) ---------------------------
   // Prioridad: DB_HOST/DB_* > DATABASE_URL (parsedDbUrl) > CUBEJS_DB_*
   databaseUrl: process.env.DATABASE_URL,
   cubejsDbHost:
@@ -89,13 +89,13 @@ export const env = {
       ? process.env.DB_TRUST_SERVER_CERT === "true"
       : (parsedDbUrl.trustServerCertificate ?? true),
 
-  // ── XMLA / SSAS ───────────────────────────────────────────────────────────
+  // -- XMLA / SSAS -----------------------------------------------------------
   xmlaEndpoint: process.env.XMLA_ENDPOINT ?? process.env.ISAPI_ENDPOINT ?? "",
   xmlaUser: process.env.XMLA_USER ?? process.env.DB_USER ?? "",
   xmlaPassword: process.env.XMLA_PWD ?? process.env.DB_PWD ?? "",
   xmlaCatalog: process.env.XMLA_CATALOG,
 
-  // ── Azure AI Projects ───────────────────────────────────────────────────
+  // -- Azure AI Projects ---------------------------------------------------
   // Endpoint del proyecto (compartido por ambos agentes)
   azureExistingAiProjectEndpoint: process.env.AZURE_EXISTING_AIPROJECT_ENDPOINT,
   azureTenantId:                  process.env.AZURE_TENANT_ID,
@@ -109,9 +109,9 @@ export const env = {
 
   // Método de autenticación Azure explícito (opcional).
   // Valores posibles:
-  //   "service_principal" → ClientSecretCredential (requiere CLIENT_ID + CLIENT_SECRET)
-  //   "device_code"       → DeviceCodeCredential (imprime código al arrancar, sin instalar nada)
-  //   (vacío)             → auto: service_principal si hay CLIENT_ID, sino DefaultAzureCredential
+  //   "service_principal" -> ClientSecretCredential (requiere CLIENT_ID + CLIENT_SECRET)
+  //   "device_code"       -> DeviceCodeCredential (imprime código al arrancar, sin instalar nada)
+  //   (vacío)             -> auto: service_principal si hay CLIENT_ID, sino DefaultAzureCredential
   azureAuthMethod: process.env.AZURE_AUTH_METHOD ?? "",
 
   // Agente 1 — Planificador / Intérprete NLU

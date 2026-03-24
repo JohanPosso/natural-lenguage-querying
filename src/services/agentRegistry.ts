@@ -21,7 +21,7 @@ import { globalRulesService } from "./globalRulesService";
 const AI_SCOPE = "https://ai.azure.com/.default";
 const RESPONSES_API_VERSION = "2025-11-15-preview";
 
-// ── System prompts de cada agente ────────────────────────────────────────────
+// -- System prompts de cada agente --------------------------------------------
 
 /**
  * AGENTE 1 — Planificador / Intérprete NLU
@@ -167,7 +167,7 @@ Output: En 2026, las Matriculaciones YTD de Ford fueron 252.873 unidades. Para V
 Input: {"question":"matriculaciones Ford en Valencia 2026","language":"es","year":"2026","results":[{"friendly_name":"Matriculaciones YTD","cube_name":"Cubo Ford","value":null,"applied_filters":[],"unresolved_filter_hints":["valencia"]}],"unresolved_filters":["valencia"]}
 Output: No fue posible aplicar el filtro por "Valencia" en el cubo de Ford: la dimensión geográfica no encontró un miembro coincidente. Intenta reformular indicando el nombre exacto de la provincia.`;
 
-// ── Implementación ────────────────────────────────────────────────────────────
+// -- Implementación ------------------------------------------------------------
 
 type AgentId = string;
 

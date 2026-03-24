@@ -21,7 +21,7 @@ dotenv.config();
 import { getSqlPool } from "../services/sqlServerClient";
 import { xmlaSyncService } from "../services/xmlaSyncService";
 
-// ── CLI args ──────────────────────────────────────────────────────────────────
+// -- CLI args ------------------------------------------------------------------
 const args = process.argv.slice(2);
 const outputArg = args.find((a) => a.startsWith("--output="));
 const skipMembers = args.includes("--skip-members");
@@ -29,7 +29,7 @@ const OUTPUT_FILE = outputArg
   ? outputArg.replace("--output=", "")
   : path.resolve(process.cwd(), "catalog-export.json");
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types ---------------------------------------------------------------------
 
 type MemberValue = {
   caption: string;
@@ -75,7 +75,7 @@ type CatalogExport = {
   cubes: CubeExport[];
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 function log(msg: string) {
   process.stdout.write(msg + "\n");
@@ -117,17 +117,17 @@ async function fetchMembersForHierarchy(
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 async function main() {
-  log("╔══════════════════════════════════════════════════════════╗");
-  log("║       EXPORTACIÓN DE CATÁLOGO OLAP → JSON               ║");
-  log("╚══════════════════════════════════════════════════════════╝");
+  log("╔==========================================================╗");
+  log("║       EXPORTACIÓN DE CATÁLOGO OLAP -> JSON               ║");
+  log("╚==========================================================╝");
   log(`  Archivo de salida : ${OUTPUT_FILE}`);
   log(`  Incluir miembros  : ${skipMembers ? "NO (--skip-members activo)" : "SÍ"}`);
   log("");
 
-  // ── 1. Conectar a SQL y obtener cubos ──────────────────────────────────────
+  // -- 1. Conectar a SQL y obtener cubos --------------------------------------
   log("► Conectando a SQL Server...");
   const pool = await getSqlPool();
   log("  [OK] Conectado\n");
@@ -152,7 +152,7 @@ async function main() {
 
   const cubeIds = cubeRows.map((c) => c.id);
 
-  // ── 2. Obtener miembros (medidas + dimensiones) de todos los cubos ─────────
+  // -- 2. Obtener miembros (medidas + dimensiones) de todos los cubos ---------
   const idList = cubeIds.join(",");
   const membersRes = await pool.request().query<{
     cube_id: number;
@@ -167,7 +167,7 @@ async function main() {
      ORDER BY cube_id, member_type DESC, friendly_name`
   );
 
-  // ── 3. Obtener jerarquías de todos los cubos ───────────────────────────────
+  // -- 3. Obtener jerarquías de todos los cubos -------------------------------
   const hierarchiesRes = await pool.request().query<{
     cube_id: number;
     dimension_unique_name: string;
@@ -180,7 +180,7 @@ async function main() {
      ORDER BY cube_id, dimension_unique_name, hierarchy_unique_name`
   );
 
-  // ── 4. Agrupar por cubo ────────────────────────────────────────────────────
+  // -- 4. Agrupar por cubo ----------------------------------------------------
   type MemberRow = { cube_id: number; cube_member: string; mdx_unique_name: string; friendly_name: string; member_type: string };
   type HierarchyRow = { cube_id: number; dimension_unique_name: string; hierarchy_unique_name: string; hierarchy_caption: string };
 
@@ -196,13 +196,13 @@ async function main() {
     hierarchiesByCube.get(h.cube_id)!.push(h);
   }
 
-  // ── 5. Construir el JSON por cubo ──────────────────────────────────────────
+  // -- 5. Construir el JSON por cubo ------------------------------------------
   log("");
   const cubesExport: CubeExport[] = [];
 
   for (let ci = 0; ci < cubeRows.length; ci++) {
     const cube = cubeRows[ci];
-    log(`\n[${ci + 1}/${cubeRows.length}] ${cube.catalog} → "${cube.xmla_cube_name}"`);
+    log(`\n[${ci + 1}/${cubeRows.length}] ${cube.catalog} -> "${cube.xmla_cube_name}"`);
 
     const cubeMembers: MemberRow[]    = membersByCube.get(cube.id) ?? [];
     const cubeHierarchies: HierarchyRow[] = hierarchiesByCube.get(cube.id) ?? [];
@@ -227,7 +227,7 @@ async function main() {
     log(`   Dimensiones: ${dimensions.length}`);
     log(`   Jerarquías : ${cubeHierarchies.length}`);
 
-    // ── Jerarquías con sus miembros ────────────────────────────────────────
+    // -- Jerarquías con sus miembros ----------------------------------------
     const hierarchiesExport: HierarchyExport[] = [];
 
     for (let hi = 0; hi < cubeHierarchies.length; hi++) {
@@ -270,7 +270,7 @@ async function main() {
     });
   }
 
-  // ── 6. Ensamblar y escribir el JSON ───────────────────────────────────────
+  // -- 6. Ensamblar y escribir el JSON ---------------------------------------
   const output: CatalogExport = {
     generated_at: new Date().toISOString(),
     ssas_endpoint: process.env.XMLA_ENDPOINT ?? "",
@@ -287,9 +287,9 @@ async function main() {
   const sizeMb = (fs.statSync(OUTPUT_FILE).size / 1024 / 1024).toFixed(2);
 
   log("\n");
-  log("╔══════════════════════════════════════════════════════════╗");
+  log("╔==========================================================╗");
   log("║                   EXPORTACIÓN COMPLETA                  ║");
-  log("╚══════════════════════════════════════════════════════════╝");
+  log("╚==========================================================╝");
   log(`  Cubos exportados : ${cubesExport.length}`);
   log(`  Archivo generado : ${OUTPUT_FILE}`);
   log(`  Tamaño del archivo: ${sizeMb} MB`);

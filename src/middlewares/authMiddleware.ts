@@ -14,7 +14,7 @@ import axios from "axios";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 
-// ── Tipos internos ───────────────────────────────────────────────────────────
+// -- Tipos internos -----------------------------------------------------------
 
 interface LauncherCube {
   name: string;
@@ -40,7 +40,7 @@ interface LauncherResponse {
   };
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// -- Helpers ------------------------------------------------------------------
 
 /**
  * Decodifica el payload de un JWT sin verificar la firma.
@@ -97,7 +97,7 @@ function extractAllowedCubes(permissions: LauncherPermissions): string[] {
   return (moduleConfig.allowed_cubes ?? []).map((c) => c.name);
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// -- Middleware ----------------------------------------------------------------
 
 export async function authMiddleware(
   req: Request,

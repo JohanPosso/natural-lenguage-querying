@@ -19,7 +19,7 @@ import type { ConnectionPool } from "mssql";
 import { env } from "../config/env";
 import { getSqlPool } from "./sqlServerClient";
 
-// ── Tipos públicos ────────────────────────────────────────────────────────────
+// -- Tipos públicos ------------------------------------------------------------
 
 /** Miembro de un cubo (medida o dimensión) compatible con el formato que usa askController */
 export type XmlaManifestMember = {
@@ -51,7 +51,7 @@ export type HierarchyInfo = {
   hierarchyCaption: string;
 };
 
-// ── Helpers internos ──────────────────────────────────────────────────────────
+// -- Helpers internos ----------------------------------------------------------
 
 function sanitizeCubeName(input: string): string {
   const normalized = input.replace(/[^\w]/g, "_").replace(/_+/g, "_");
@@ -86,7 +86,7 @@ function toUniqueKey(base: string, used: Set<string>): string {
   return candidate;
 }
 
-// ── Servicio ──────────────────────────────────────────────────────────────────
+// -- Servicio ------------------------------------------------------------------
 
 class CatalogService {
   private initialized = false;
@@ -152,14 +152,14 @@ class CatalogService {
 
   /**
    * Devuelve el manifiesto de catálogo filtrado por allowedCubes.
-   * allowedCubes = null → todos los cubos (BYPASS_AUTH).
+   * allowedCubes = null -> todos los cubos (BYPASS_AUTH).
    * Compara contra cube_name, catalog y xmla_cube_name para máxima compatibilidad
    * con los nombres que devuelve el API Launcher.
    */
   async getManifest(allowedCubes?: string[] | null): Promise<XmlaManifest> {
     const pool = await this.getPool();
 
-    // ── Obtener cubos ──────────────────────────────────────────────────────
+    // -- Obtener cubos ------------------------------------------------------
     const cubeReq = pool.request();
     let cubeWhere = "";
 
@@ -189,7 +189,7 @@ class CatalogService {
 
     const cubeIds = cubes.map((c) => c.id);
 
-    // ── Obtener miembros de esos cubos ────────────────────────────────────
+    // -- Obtener miembros de esos cubos ------------------------------------
     const memReq = pool.request();
     const idParams = cubeIds.map((id, i) => {
       memReq.input(`cid${i}`, id);
@@ -326,7 +326,7 @@ class CatalogService {
         await pool.request().input("id", cubeId).query("DELETE FROM dbo.olap_members WHERE cube_id = @id");
         await pool.request().input("id", cubeId).query("DELETE FROM dbo.olap_hierarchies WHERE cube_id = @id");
 
-        // ── Medidas ──────────────────────────────────────────────────────
+        // -- Medidas ------------------------------------------------------
         const measureRows = await discoverFn("MDSCHEMA_MEASURES", { CUBE_NAME: xmlaCubeName }, catalog);
         const usedMeasureKeys = new Set<string>();
 
@@ -349,7 +349,7 @@ class CatalogService {
           totalMembers++;
         }
 
-        // ── Dimensiones ──────────────────────────────────────────────────
+        // -- Dimensiones --------------------------------------------------
         const dimRows = await discoverFn("MDSCHEMA_DIMENSIONS", { CUBE_NAME: xmlaCubeName }, catalog);
         const usedDimKeys = new Set<string>();
 
@@ -372,14 +372,14 @@ class CatalogService {
           totalMembers++;
         }
 
-        // ── Jerarquías ────────────────────────────────────────────────────
+        // -- Jerarquías ----------------------------------------------------
         const hierRows = await discoverFn("MDSCHEMA_HIERARCHIES", { CUBE_NAME: xmlaCubeName }, catalog);
         for (const row of hierRows) {
           const hierarchyUniqueName = row.HIERARCHY_UNIQUE_NAME;
           if (!hierarchyUniqueName || hierarchyUniqueName.startsWith("[Measures]")) continue;
           // DIMENSION_UNIQUE_NAME de SSAS es el nombre de la dimensión padre (ej: "[-MT Producto]").
           // Si SSAS no lo devuelve, se extrae del prefijo del hierarchy unique name:
-          // "[-MT Producto].[Marca]" → "[-MT Producto]"
+          // "[-MT Producto].[Marca]" -> "[-MT Producto]"
           let dimUnique = row.DIMENSION_UNIQUE_NAME ?? "";
           if (!dimUnique && hierarchyUniqueName.includes("].")) {
             dimUnique = hierarchyUniqueName.substring(0, hierarchyUniqueName.lastIndexOf("].") + 1);

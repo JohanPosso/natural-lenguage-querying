@@ -13,7 +13,7 @@ import { normalizeJargon } from "../data/automotiveJargon";
 // Re-export for chatController (backward compat)
 export type { ConversationTurn };
 
-// ── Types ───────────────────────────────────────────────────────────────────
+// -- Types -------------------------------------------------------------------
 
 type ManifestCube = XmlaManifest["cubes"][number];
 type ManifestMember = ManifestCube["members"][number];
@@ -69,7 +69,7 @@ export type AskResponsePayload = {
   };
 };
 
-// ── Console pipeline logger ──────────────────────────────────────────────────
+// -- Console pipeline logger --------------------------------------------------
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -87,7 +87,7 @@ function pLog(icon: string, color: string, label: string, detail = ""): void {
   console.log(`${DIM}[${ts}]${RESET} ${color}${icon} ${BOLD}${label}${RESET}${detailStr}`);
 }
 
-// ── Text utilities ──────────────────────────────────────────────────────────
+// -- Text utilities ----------------------------------------------------------
 
 function normalize(text: string): string {
   return text
@@ -133,7 +133,7 @@ function normalizeFilters(rawFilters: unknown[]): LlmFilter[] {
     .filter((f) => f.hierarchy_mdx && f.values.length > 0);
 }
 
-// ── Cube pre-filtering ──────────────────────────────────────────────────────
+// -- Cube pre-filtering ------------------------------------------------------
 
 function prefilterCubes(
   manifest: XmlaManifest,
@@ -163,11 +163,11 @@ function prefilterCubes(
 /**
  * Improved cube pre-filter: uses structured QueryIntent signals instead of raw tokens.
  * The interpreter agent produces much better signals:
- *  - preferredCube → direct strong match (50 pts)
- *  - primaryMetrics → match against measure names (up to 15 pts)
- *  - entities (brand/product) → match against cube name/catalog (8 pts each)
- *  - domain → match against catalog names (5 pts)
- *  - prevCubeName → sticky bonus (20 pts)
+ *  - preferredCube -> direct strong match (50 pts)
+ *  - primaryMetrics -> match against measure names (up to 15 pts)
+ *  - entities (brand/product) -> match against cube name/catalog (8 pts each)
+ *  - domain -> match against catalog names (5 pts)
+ *  - prevCubeName -> sticky bonus (20 pts)
  */
 function prefilterCubesByIntent(
   cubes: ManifestCube[],
@@ -221,7 +221,7 @@ function prefilterCubesByIntent(
     // Sticky bonus for previous cube (conversation continuity)
     if (prevCubeName && cube.cubeName === prevCubeName) score += 20;
 
-    // ── REGLA: queries genéricas sin marca → priorizar cubo de mercado general ──
+    // -- REGLA: queries genéricas sin marca -> priorizar cubo de mercado general --
     // Con pocos cubos visibles (≤5) la penalización es suave para no descartar ninguno.
     const hasBrandEntity = intent.entities.some((e) => e.type === "brand" || e.type === "product");
     const isGenericMarketQuery = !hasBrandEntity && !intent.preferredCube;
@@ -243,10 +243,10 @@ function prefilterCubesByIntent(
     if (isGenericMarketQuery && isBrandedCube && cubes.length > 3) score -= 15; // solo penalizar si hay cubo específico disponible
 
     // Cuando el usuario menciona una marca y hay un cubo branded: bonificar ese cubo branded
-    // aunque la marca no coincida EXACTAMENTE (ej: pregunta Ford → cubo Nissan no recibe bonus,
+    // aunque la marca no coincida EXACTAMENTE (ej: pregunta Ford -> cubo Nissan no recibe bonus,
     // pero tampoco se penaliza mucho si no hay mejor opción)
     if (hasBrandEntity && isGenericCube) score += 10; // el cubo general de mercado siempre puede filtrar por marca
-    // ─────────────────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     return { cube, score };
   });
@@ -318,7 +318,7 @@ function prefilterMeasures(cube: ManifestCube, question: string, topN: number): 
   return combined.slice(0, topN + 10); // un margen extra para no truncar importantes
 }
 
-// ── Catalog context builder (async — enriches with XMLA hierarchy info) ─────
+// -- Catalog context builder (async — enriches with XMLA hierarchy info) -----
 
 /**
  * Builds the catalog context for the LLM.
@@ -359,15 +359,15 @@ function buildMeasureSemanticNote(cube: ManifestCube): string {
     );
     for (const pair of genericPairs.slice(0, 6)) {
       notes.push(
-        `  • "${pair.generic}" = TOTAL MERCADO (todas las marcas, incluida la competencia)`
+        `  - "${pair.generic}" = TOTAL MERCADO (todas las marcas, incluida la competencia)`
       );
-      notes.push(`  • "${pair.branded}" = Solo ${cube.catalog}`);
+      notes.push(`  - "${pair.branded}" = Solo ${cube.catalog}`);
     }
     notes.push(
-      `  → Si el usuario pide "matriculaciones del mercado", "mercado total", "mercado DGT" o similar → usa la medida GENÉRICA.`
+      `  -> Si el usuario pide "matriculaciones del mercado", "mercado total", "mercado DGT" o similar -> usa la medida GENÉRICA.`
     );
     notes.push(
-      `  → Si el usuario pide las de la marca ("${brandSuffix}", "nosotros", "nuestra marca") → usa la medida ESPECÍFICA.`
+      `  -> Si el usuario pide las de la marca ("${brandSuffix}", "nosotros", "nuestra marca") -> usa la medida ESPECÍFICA.`
     );
   }
 
@@ -395,7 +395,7 @@ async function buildCatalogContextWithHierarchies(
     const topMeasures = prefilterMeasures(cube, question, 50);
     lines.push("MEDIDAS (relevantes para la pregunta):");
     for (const m of topMeasures) {
-      lines.push(`  ${m.mdxUniqueName} → "${m.friendlyName}"`);
+      lines.push(`  ${m.mdxUniqueName} -> "${m.friendlyName}"`);
     }
 
     // Fetch real hierarchy paths from SSAS (cached after first call)
@@ -437,7 +437,7 @@ async function buildCatalogContextWithHierarchies(
 }
 
 
-// ── Cube resolution ─────────────────────────────────────────────────────────
+// -- Cube resolution ---------------------------------------------------------
 
 function resolveCube(manifest: XmlaManifest, selectedName: string): ManifestCube {
   // 1) Exact match by cubeName
@@ -489,7 +489,7 @@ function resolveCube(manifest: XmlaManifest, selectedName: string): ManifestCube
   );
 }
 
-// ── Filter resolution ────────────────────────────────────────────────────────
+// -- Filter resolution --------------------------------------------------------
 
 type FilterExpansion = {
   original: string;          // term the user used  ("SUV", "motos")
@@ -554,7 +554,7 @@ async function resolveFilters(
         } else {
           // Not exact — try multi-match strategies for umbrella terms (motos, SUV, etc.)
 
-          // Strategy 1: prefix match — "motos"→["Moto Carretera","Moto Campo","Moto Scooter"]
+          // Strategy 1: prefix match — "motos"->["Moto Carretera","Moto Campo","Moto Scooter"]
           const prefixMatches = await mdxBridgeService.findMembersWithPrefix(
             cube.catalog, cube.xmlaCubeName, filter.hierarchy_mdx, rawValue
           );
@@ -562,36 +562,36 @@ async function resolveFilters(
           if (prefixMatches.length > 0) {
             for (const m of prefixMatches) resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
             await debugLogger.log("ask", "filter_prefix_match", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, matched: prefixMatches.map((m) => m.caption) });
-            console.log(`[resolveFilters] Prefix "${rawValue}" → ${prefixMatches.map((m) => m.caption).join(", ")}`);
+            console.log(`[resolveFilters] Prefix "${rawValue}" -> ${prefixMatches.map((m) => m.caption).join(", ")}`);
             if (prefixMatches.length > 1) {
               expansions.push({ original: rawValue, expanded: prefixMatches.map((m) => m.caption), friendly_name: filter.friendly_name || filter.hierarchy_mdx });
             }
 
           } else {
-            // Strategy 2: contains match — "SUV" → [ASUV, BSUV, CSUV, DSUV, ESUV, FSUV]
+            // Strategy 2: contains match — "SUV" -> [ASUV, BSUV, CSUV, DSUV, ESUV, FSUV]
             const containsMatches = await mdxBridgeService.findMembersContaining(
               cube.catalog, cube.xmlaCubeName, filter.hierarchy_mdx, rawValue
             );
 
             if (containsMatches.length >= 2) {
-              // Múltiples contains → término paraguas (motos, SUV, etc.), incluir todos
+              // Múltiples contains -> término paraguas (motos, SUV, etc.), incluir todos
               for (const m of containsMatches) resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
               await debugLogger.log("ask", "filter_contains_match", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, matched: containsMatches.map((m) => m.caption) });
-              console.log(`[resolveFilters] Contains "${rawValue}" → ${containsMatches.map((m) => m.caption).join(", ")}`);
+              console.log(`[resolveFilters] Contains "${rawValue}" -> ${containsMatches.map((m) => m.caption).join(", ")}`);
               expansions.push({ original: rawValue, expanded: containsMatches.map((m) => m.caption), friendly_name: filter.friendly_name || filter.hierarchy_mdx });
 
             } else if (containsMatches.length === 1) {
-              // Un solo contains match → usarlo directamente (no es un término paraguas)
+              // Un solo contains match -> usarlo directamente (no es un término paraguas)
               const m = containsMatches[0];
               resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
               await debugLogger.log("ask", "filter_contains_single", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, resolved: m.uniqueName });
-              console.log(`[resolveFilters] Contains(1) "${rawValue}" → ${m.caption}`);
+              console.log(`[resolveFilters] Contains(1) "${rawValue}" -> ${m.caption}`);
 
             } else if (best) {
-              // Sin contains, pero findBestMemberByCaption encontró algo → usar como best-effort
+              // Sin contains, pero findBestMemberByCaption encontró algo -> usar como best-effort
               resolvedMembers.push({ value_caption: best.caption, member_unique_name: best.uniqueName });
               await debugLogger.log("ask", "filter_resolved_partial", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, resolved: best.uniqueName });
-              console.log(`[resolveFilters] Partial "${rawValue}" → ${best.caption}`);
+              console.log(`[resolveFilters] Partial "${rawValue}" -> ${best.caption}`);
 
             } else {
               unresolvedValues.push(rawValue);
@@ -627,14 +627,14 @@ async function resolveFilters(
   return { groups, unresolved, expansions };
 }
 
-// ── Filter combination generation ────────────────────────────────────────────
+// -- Filter combination generation --------------------------------------------
 
 const MAX_QUERY_COMBINATIONS = 100;
 
 /**
  * Generates the Cartesian product of multi-value filter groups.
  * Single-value groups are always included in every combination.
- * Example: Province=[MADRID,VALENCIA] + Segment=[Moto Carretera] →
+ * Example: Province=[MADRID,VALENCIA] + Segment=[Moto Carretera] ->
  *   [{MADRID, Moto Carretera}, {VALENCIA, Moto Carretera}]
  */
 function generateFilterCombinations(groups: ResolvedFilterGroup[]): FilterTuple[][] {
@@ -677,7 +677,7 @@ function generateFilterCombinations(groups: ResolvedFilterGroup[]): FilterTuple[
   return combos.slice(0, MAX_QUERY_COMBINATIONS).map((combo) => [...baseTuples, ...combo]);
 }
 
-// ── MDX Execution ────────────────────────────────────────────────────────────
+// -- MDX Execution ------------------------------------------------------------
 
 /**
  * Converts SSAS raw numeric strings (may be scientific notation like 1.08683E5)
@@ -870,7 +870,7 @@ async function executeMeasureQuery(
   return results;
 }
 
-// ── Response Generation (delegated to responseAgent) ────────────────────────
+// -- Response Generation (delegated to responseAgent) ------------------------
 
 async function generateNaturalResponse(
   question: string,
@@ -917,7 +917,7 @@ async function generateNaturalResponse(
   });
 }
 
-// ── Main Pipeline ────────────────────────────────────────────────────────────
+// -- Main Pipeline ------------------------------------------------------------
 
 export async function runAskPipeline(
   userPrompt: string,
@@ -941,11 +941,11 @@ export async function runAskPipeline(
     allowedCubes: allowedCubes ?? "all"
   });
   const t0 = Date.now();
-  console.log(`\n${CYAN}${"─".repeat(70)}${RESET}`);
+  console.log(`\n${CYAN}${"-".repeat(70)}${RESET}`);
   pLog("[Q]", CYAN, "PREGUNTA", `"${prompt}"`);
   pLog("[TRACE]", DIM, "traceId", traceId);
 
-  // ── Detección temprana de preguntas de autodescripción ────────────────────
+  // -- Detección temprana de preguntas de autodescripción --------------------
   // Se hace ANTES del intent extraction para no depender de si el LLM lo clasifica
   // como out_of_domain o meta_question.
   const promptNormEarly = normalize(prompt);
@@ -969,11 +969,11 @@ export async function runAskPipeline(
       data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
-  // ─────────────────────────────────────────────────────────────────────────
+  // -------------------------------------------------------------------------
 
   const manifest = await catalogService.getManifest();
 
-  // ── Aplicar restricciones de acceso: construir el conjunto de cubos visibles ─
+  // -- Aplicar restricciones de acceso: construir el conjunto de cubos visibles -
   // El API Launcher devuelve nombres como "Cubo Nissan" que coinciden con c.catalog o
   // c.xmlaCubeName, no con c.cubeName (ID sanitizado interno: "Cubo_Nissan_Cubo_Nissan").
   const isCubeVisible = (c: ManifestCube): boolean =>
@@ -1009,14 +1009,14 @@ export async function runAskPipeline(
     };
   }
 
-  // ── Pre-normalización de jergas del sector ───────────────────────────────────
+  // -- Pre-normalización de jergas del sector -----------------------------------
   // Sustituye términos del glosario automotriz antes de enviar al intérprete.
   // Solo actúa sobre términos marcados como preNormalize:true (inequívocos).
   const jargonResult = normalizeJargon(prompt);
   const normalizedPrompt = jargonResult.normalized;
   if (jargonResult.substitutions.length > 0) {
     pLog("[JARGON]", YELLOW, "Jergas normalizadas",
-      jargonResult.substitutions.map((s) => `"${s.from}" → "${s.to}"`).join(" | "));
+      jargonResult.substitutions.map((s) => `"${s.from}" -> "${s.to}"`).join(" | "));
     await debugLogger.log("ask", "jargon_normalized", {
       traceId,
       original: prompt,
@@ -1024,9 +1024,9 @@ export async function runAskPipeline(
       substitutions: jargonResult.substitutions
     });
   }
-  // ─────────────────────────────────────────────────────────────────────────────
+  // -----------------------------------------------------------------------------
 
-  // ── Step 1: Agent 1 — Interpreter: extract structured intent from the question ─
+  // -- Step 1: Agent 1 — Interpreter: extract structured intent from the question -
   pLog("[INTENT]", MAGENTA, "Agent 1 (Intérprete): extrayendo intención...");
   // Pasar los nombres de los cubos visibles para que el intérprete use preferredCube
   // solo con cubos a los que este usuario tiene acceso real.
@@ -1040,7 +1040,7 @@ export async function runAskPipeline(
 
     // 1) Si hay preferredCube, ir directamente a la descripción del cubo específico
     //    ANTES de cualquier otro chequeo para evitar falsos positivos en self-description.
-    //    Ej: "que me puedes decir sobre el cubo de matriculaciones" → preferredCube="Matriculaciones"
+    //    Ej: "que me puedes decir sobre el cubo de matriculaciones" -> preferredCube="Matriculaciones"
     //    NO debe caer en isSelfDescription aunque empiece por "que" y contenga "puedes".
 
     // 2) Detect self-description questions ("¿qué eres?", "¿qué puedes hacer?", etc.)
@@ -1133,7 +1133,7 @@ export async function runAskPipeline(
     };
   }
 
-  // ── Step 2: Pre-filter candidate cubes using intent signals (improved) ──────
+  // -- Step 2: Pre-filter candidate cubes using intent signals (improved) ------
   const candidateCubes = prefilterCubesByIntent(visibleCubes, intent, prompt, 5, prevCubeName);
   await debugLogger.log("ask", "candidate_cubes", {
     traceId,
@@ -1165,7 +1165,7 @@ export async function runAskPipeline(
     }
   }
 
-  // ── Guarda de entidades de marca: solo bloquear si NO hay ningún cubo visible
+  // -- Guarda de entidades de marca: solo bloquear si NO hay ningún cubo visible
   // que pueda contener datos de esa marca, ya sea por nombre de cubo O por tener
   // un cubo de mercado general (Matriculaciones, Market, etc.) donde la marca
   // aparece como filtro de dimensión.
@@ -1222,11 +1222,11 @@ export async function runAskPipeline(
     }
   }
 
-  // ── Step 3: Build catalog context enriched with SSAS hierarchy paths ─────────
+  // -- Step 3: Build catalog context enriched with SSAS hierarchy paths ---------
   pLog("[BUILD] ", BLUE, "Construyendo catálogo con jerarquías SSAS...");
   const catalogContext = await buildCatalogContextWithHierarchies(candidateCubes, prompt);
 
-  // ── Step 4: Agent 2 — Mapper: map intent to exact catalog elements ───────────
+  // -- Step 4: Agent 2 — Mapper: map intent to exact catalog elements -----------
   pLog("[MAP] ", MAGENTA, "Agent 2 (Mapeador): seleccionando cubo, medidas y filtros...");
   let selection: LlmSelection;
   try {
@@ -1239,10 +1239,10 @@ export async function runAskPipeline(
     });
     throw err;
   }
-  // ── GUARDIA DE FILTROS: eliminar filtros claramente inventados por el mapper ──
+  // -- GUARDIA DE FILTROS: eliminar filtros claramente inventados por el mapper --
   // CRITERIO CONSERVADOR: solo se poda un filtro cuando hay CERTEZA de que el usuario
   // NO lo pidió. El mapper puede detectar entidades que el intérprete no capturó
-  // explícitamente (ej: "en 2024" → el mapper infiere el año aunque timeFilters.year sea null).
+  // explícitamente (ej: "en 2024" -> el mapper infiere el año aunque timeFilters.year sea null).
   // En caso de duda, se deja pasar el filtro — es mejor un falso positivo que perder datos.
 
   const hasIntentYear    = Boolean(intent.timeFilters?.year);
@@ -1254,15 +1254,15 @@ export async function runAskPipeline(
 
   const originalFilterCount = selection.filters.length;
   selection.filters = selection.filters.filter((f) => {
-    // ─ Filtro de AÑO ──────────────────────────────────────────────────────────
+    // - Filtro de AÑO ----------------------------------------------------------
     if (f.type === "year") {
-      if (hasIntentYear) return true; // intérprete lo detectó → ok
+      if (hasIntentYear) return true; // intérprete lo detectó -> ok
       // El intérprete no lo detectó. Comprobamos si el año aparece en el texto original.
       const yearInQuestion = f.values.some((v) => normalizedPrompt.includes(v));
       return yearInQuestion;
     }
 
-    // ─ Filtro de MES ──────────────────────────────────────────────────────────
+    // - Filtro de MES ----------------------------------------------------------
     if (f.type === "month") {
       if (hasIntentMonth) return true;
       const monthInQuestion = f.values.some((v) =>
@@ -1271,9 +1271,9 @@ export async function runAskPipeline(
       return monthInQuestion;
     }
 
-    // ─ Filtro de DIMENSIÓN ────────────────────────────────────────────────────
+    // - Filtro de DIMENSIÓN ----------------------------------------------------
     if (f.type === "dimension") {
-      if (hasIntentEntities) return true; // el intérprete extrajo entidades → ok
+      if (hasIntentEntities) return true; // el intérprete extrajo entidades -> ok
       // Sin entidades declaradas: solo podar si NINGUNO de los valores del filtro
       // aparece con algún token de la pregunta (ej. mapper inventó "Madrid" sin que
       // el usuario lo dijera).
@@ -1299,7 +1299,7 @@ export async function runAskPipeline(
       hadEntities: hasIntentEntities
     });
   }
-  // ─────────────────────────────────────────────────────────────────────────────
+  // -----------------------------------------------------------------------------
 
   await debugLogger.log("ask", "llm_selection", { traceId, selection });
   pLog("[OK]", GREEN, "Mapeador seleccionó cubo", `"${selection.cube_name}"`);
@@ -1307,13 +1307,13 @@ export async function runAskPipeline(
     pLog("  [MEASURE]", GREEN, `Medida`, `${m.mdx_unique_name}  (${m.friendly_name})`);
   }
   for (const f of selection.filters ?? []) {
-    pLog("  🔍", YELLOW, `Filtro ${f.type}`, `${f.hierarchy_mdx}  →  ${f.values.join(", ")}`);
+    pLog("  🔍", YELLOW, `Filtro ${f.type}`, `${f.hierarchy_mdx}  ->  ${f.values.join(", ")}`);
   }
   if (selection.reasoning) {
     pLog("  [INFO]", DIM, "Razonamiento", selection.reasoning.slice(0, 120));
   }
 
-  // ── Step 5: Resolve cube in manifest (solo entre los cubos visibles del usuario) ─
+  // -- Step 5: Resolve cube in manifest (solo entre los cubos visibles del usuario) -
   let selectedCube: ManifestCube;
   try {
     selectedCube = resolveCube({ ...manifest, cubes: visibleCubes }, selection.cube_name);
@@ -1334,7 +1334,7 @@ export async function runAskPipeline(
     selection.reasoning = retryMapping.reasoning;
   }
 
-  // ── Step 6: Validate + normalize measures from manifest ───────────────────
+  // -- Step 6: Validate + normalize measures from manifest -------------------
   const validatedMeasures = selection.measures
     .map((m) => {
       const cubeMeasures = selectedCube.members.filter((mb) => mb.type === "measure");
@@ -1413,13 +1413,13 @@ export async function runAskPipeline(
     }
   }
 
-  // ── Step 7: Resolve filter members via XMLA DISCOVER (multi-value aware) ──
+  // -- Step 7: Resolve filter members via XMLA DISCOVER (multi-value aware) --
   const { groups: resolvedFilterGroups, unresolved: unresolvedFilters, expansions: filterExpansions } =
     await resolveFilters(selectedCube, selection.filters, traceId);
   await debugLogger.log("ask", "resolved_filters", { traceId, groups: resolvedFilterGroups, unresolved: unresolvedFilters });
   pLog("[LINK]", BLUE, "Filtros resueltos en SSAS");
   for (const g of resolvedFilterGroups) {
-    const members = g.members.map((m) => `${m.value_caption} → ${m.member_unique_name}`).join(" | ");
+    const members = g.members.map((m) => `${m.value_caption} -> ${m.member_unique_name}`).join(" | ");
     pLog("  [OK]", GREEN, g.hierarchy_friendly, members);
   }
   if (unresolvedFilters.length > 0) {
@@ -1428,7 +1428,7 @@ export async function runAskPipeline(
     }
   }
 
-  // ── Step 8: Execute MDX — one query per filter combination ────────────────
+  // -- Step 8: Execute MDX — one query per filter combination ----------------
   const allResults: MeasureResult[] = [];
   for (const measure of validatedMeasures) {
     try {
@@ -1454,7 +1454,7 @@ export async function runAskPipeline(
     );
   }
 
-  // ── Step 9: Agent 3 — Response: format final answer ────────────────────────
+  // -- Step 9: Agent 3 — Response: format final answer ------------------------
   pLog("[WRITE] ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
   const answer = await generateNaturalResponse(prompt, allResults, selection, unresolvedFilters, filterExpansions);
   const primary = allResults[0];
@@ -1462,7 +1462,7 @@ export async function runAskPipeline(
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   pLog("[INFO]", GREEN, "RESPUESTA FINAL", `\n${answer}`);
   pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${allResults.length} resultado(s)`);
-  console.log(`${CYAN}${"─".repeat(70)}${RESET}\n`);
+  console.log(`${CYAN}${"-".repeat(70)}${RESET}\n`);
 
   await debugLogger.log("ask", "pipeline_success", {
     traceId,
@@ -1500,7 +1500,7 @@ export async function askController(req: Request, res: Response): Promise<Respon
     return res.status(200).json(payload);
   } catch (error) {
     pLog("[ERROR]", RED, "PIPELINE ERROR", (error as Error).message);
-    console.log(`${RED}${"─".repeat(70)}${RESET}\n`);
+    console.log(`${RED}${"-".repeat(70)}${RESET}\n`);
     await debugLogger.log("ask", "pipeline_error", { error: (error as Error).message });
     return res.status(500).json({
       code: "ASK_PIPELINE_ERROR",

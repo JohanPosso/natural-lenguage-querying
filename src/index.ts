@@ -26,7 +26,7 @@ app.use(express.static(path.resolve(process.cwd(), "public")));
 
 const swaggerDocument = YAML.load(path.resolve(process.cwd(), "swagger.yaml"));
 
-// ── CORS (para front en otro dominio/puerto) ──────────────────────────────
+// -- CORS (para front en otro dominio/puerto) ------------------------------
 // El front envía Authorization y eso dispara preflight OPTIONS.
 // Permitimos Authorization + Content-Type y respondemos a OPTIONS.
 app.use((req, res, next) => {

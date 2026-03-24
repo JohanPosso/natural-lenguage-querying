@@ -17,7 +17,7 @@
 export type JargonType =
   | "measure"    // métrica / KPI
   | "segment"    // segmento de producto / categoría
-  | "fuel"       // tipo de combustible / fuente de energía (eléctrico, diésel, gasolina…)
+  | "fuel"       // tipo de combustible / fuente de energía (eléctrico, diésel, gasolina...)
   | "geography"  // zona geográfica o región
   | "temporal"   // período de tiempo o comparativa temporal
   | "brand"      // marca de vehículo
@@ -40,9 +40,9 @@ export interface JargonEntry {
   preNormalize?: boolean;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // MEDIDAS / KPIs
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const MEASURES: JargonEntry[] = [
   {
     jargon: [
@@ -170,9 +170,9 @@ const MEASURES: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // SEGMENTOS DE PRODUCTO
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const SEGMENTS: JargonEntry[] = [
   {
     jargon: [
@@ -289,9 +289,9 @@ const SEGMENTS: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // GEOGRAFÍA
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const GEOGRAPHY: JargonEntry[] = [
   {
     jargon: ["la capital", "capital", "km 0", "madrid capital", "villa y corte"],
@@ -351,9 +351,9 @@ const GEOGRAPHY: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // CANALES DE VENTA
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const CHANNELS: JargonEntry[] = [
   {
     jargon: [
@@ -392,9 +392,9 @@ const CHANNELS: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // TÉRMINOS TEMPORALES Y COMPARATIVAS
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const TEMPORAL: JargonEntry[] = [
   {
     jargon: [
@@ -443,9 +443,9 @@ const TEMPORAL: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // MARCAS / FABRICANTES
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const BRANDS: JargonEntry[] = [
   {
     jargon: ["la japonesa", "el japonés", "niss", "nisan"],
@@ -473,9 +473,9 @@ const BRANDS: JargonEntry[] = [
   }
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // EXPORT PRINCIPAL
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /** Glosario completo del sector automoción */
 export const JARGON_ENTRIES: JargonEntry[] = [
@@ -487,9 +487,9 @@ export const JARGON_ENTRIES: JargonEntry[] = [
   ...BRANDS
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // PRE-NORMALIZACIÓN
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 export interface NormalizationResult {
   /** Texto con las jergas sustituidas por sus términos canónicos */
@@ -528,9 +528,9 @@ export function normalizeJargon(text: string): NormalizationResult {
   return { normalized, substitutions };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // CONTEXTO LLM — glosario formateado para inyectar en prompts
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
  * Genera un bloque de texto con el glosario completo para incluir
@@ -562,7 +562,7 @@ export function buildJargonContextBlock(): string {
   const labels: Record<JargonType, string> = {
     measure:   "MEDIDAS / KPIs",
     segment:   "SEGMENTOS DE PRODUCTO",
-    fuel:      "TIPOS DE COMBUSTIBLE / ENERGÍA (→ dimensión 'Fuente de energía', NO 'Segmento')",
+    fuel:      "TIPOS DE COMBUSTIBLE / ENERGÍA (-> dimensión 'Fuente de energía', NO 'Segmento')",
     geography: "ZONAS GEOGRÁFICAS",
     temporal:  "PERÍODOS TEMPORALES",
     brand:     "MARCAS / FABRICANTES",
@@ -572,10 +572,10 @@ export function buildJargonContextBlock(): string {
 
   for (const [type, entries] of Object.entries(byType) as [JargonType, JargonEntry[]][]) {
     if (entries.length === 0) continue;
-    lines.push(`── ${labels[type]} ──`);
+    lines.push(`-- ${labels[type]} --`);
     for (const e of entries) {
       const jargonList = e.jargon.slice(0, 6).join(", "); // máx 6 para no saturar
-      lines.push(`  • ${jargonList} → "${e.canonical}"`);
+      lines.push(`  - ${jargonList} -> "${e.canonical}"`);
       if (e.description) lines.push(`    (${e.description})`);
     }
     lines.push("");

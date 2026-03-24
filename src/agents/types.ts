@@ -2,12 +2,12 @@
  * Tipos compartidos entre los agentes del pipeline multiagente.
  *
  * Flujo:
- *   QueryIntent  (Agent 1 → Agent 2)
- *   CatalogMapping (Agent 2 → pipeline MDX)
- *   FinalAnswer    (Agent 3 → usuario)
+ *   QueryIntent  (Agent 1 -> Agent 2)
+ *   CatalogMapping (Agent 2 -> pipeline MDX)
+ *   FinalAnswer    (Agent 3 -> usuario)
  */
 
-// ── Agent 1 output: intención de la pregunta ─────────────────────────────────
+// -- Agent 1 output: intención de la pregunta ---------------------------------
 
 export type EntityType = "location" | "product" | "brand" | "segment" | "fuel" | "temporal" | "other";
 
@@ -17,7 +17,7 @@ export type QueryEntity = {
   /** Valor tal como lo dijo el usuario */
   rawValue: string;
   /**
-   * Pista de normalización evidente (ej: "madrid" → "MADRID", "enero" → "Enero").
+   * Pista de normalización evidente (ej: "madrid" -> "MADRID", "enero" -> "Enero").
    * El Agente 2 puede ignorarla si encuentra una mejor coincidencia en el catálogo.
    */
   normalizedHint?: string;
@@ -59,7 +59,7 @@ export type QueryIntent = {
   domain: string;
 };
 
-// ── Agent 2 output: mapeo al catálogo OLAP ───────────────────────────────────
+// -- Agent 2 output: mapeo al catálogo OLAP -----------------------------------
 
 export type MappedMeasure = {
   technical_name: string;   // "Cubo_Nissan_Cubo_Nissan.matriculaciones"
@@ -83,7 +83,7 @@ export type CatalogMapping = {
   filters: MappedFilter[];
 };
 
-// ── Turn de conversación pasado al pipeline ───────────────────────────────────
+// -- Turn de conversación pasado al pipeline -----------------------------------
 
 export type ConversationTurn = {
   role: "user" | "assistant";

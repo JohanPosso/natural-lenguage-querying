@@ -20,7 +20,7 @@ async function run(): Promise<void> {
   console.log(`Worker ID  : ${env.azureWorkerAgentId}`);
   console.log(`Pregunta   : ${question}\n`);
 
-  // ── Agente 1: Planificador ──────────────────────────────────────────────
+  // -- Agente 1: Planificador ----------------------------------------------
   console.log("--- AGENTE 1: Planificador ---");
   let plan;
   try {
@@ -32,7 +32,7 @@ async function run(): Promise<void> {
     process.exit(1);
   }
 
-  // ── Agente 2: Worker (con datos de prueba simulados) ────────────────────
+  // -- Agente 2: Worker (con datos de prueba simulados) --------------------
   console.log("\n--- AGENTE 2: Worker (datos simulados) ---");
   try {
     const fakeResults = [

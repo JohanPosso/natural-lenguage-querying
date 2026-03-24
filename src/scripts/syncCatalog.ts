@@ -22,7 +22,7 @@ import { xmlaSyncService } from "../services/xmlaSyncService";
 
 async function main() {
   console.log("=".repeat(60));
-  console.log("SINCRONIZACIÓN DE CATÁLOGO OLAP → SQL SERVER");
+  console.log("SINCRONIZACIÓN DE CATÁLOGO OLAP -> SQL SERVER");
   console.log("=".repeat(60));
   console.log(`Endpoint XMLA: ${process.env.XMLA_ENDPOINT}`);
   console.log(`Base de datos: ${process.env.DATABASE_URL?.split(";")[0]}`);

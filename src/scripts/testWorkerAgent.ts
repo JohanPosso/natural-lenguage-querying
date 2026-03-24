@@ -25,7 +25,7 @@ async function callAgentById(
 ): Promise<string> {
   // 1. Crear un thread de conversación fresco
   const thread = await (client.agents as any).createThread();
-  console.log(`  → Thread creado: ${thread.id}`);
+  console.log(`  -> Thread creado: ${thread.id}`);
 
   // 2. Añadir el mensaje del usuario al thread
   await (client.agents as any).createMessage(thread.id, {
@@ -35,7 +35,7 @@ async function callAgentById(
 
   // 3. Lanzar el run con el agente indicado
   let run = await (client.agents as any).createRun(thread.id, agentId);
-  console.log(`  → Run iniciado: ${run.id}  estado: ${run.status}`);
+  console.log(`  -> Run iniciado: ${run.id}  estado: ${run.status}`);
 
   // 4. Esperar a que termine
   let attempts = 0;
@@ -45,7 +45,7 @@ async function callAgentById(
   ) {
     await sleep(POLL_INTERVAL_MS);
     run = await (client.agents as any).getRun(thread.id, run.id);
-    process.stdout.write(`\r  → Esperando... estado: ${run.status.padEnd(20)}`);
+    process.stdout.write(`\r  -> Esperando... estado: ${run.status.padEnd(20)}`);
     attempts++;
   }
   console.log();

@@ -7,7 +7,7 @@
  *                               [OK] Funciona en servidores on-premise Windows sin az/VS Code.
  *
  *  2. DefaultAzureCredential  — fallback para entornos de desarrollador (az CLI, VS Code,
- *                               Managed Identity en Azure, PowerShell Az…).
+ *                               Managed Identity en Azure, PowerShell Az...).
  *
  * Para usar la opción 1, añadir al .env:
  *   AZURE_CLIENT_ID=<Application (client) ID del App Registration>
