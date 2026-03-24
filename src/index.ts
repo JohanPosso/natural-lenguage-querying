@@ -26,7 +26,12 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.resolve(process.cwd(), "public")));
 
-const swaggerDocument = YAML.load(path.resolve(process.cwd(), "swagger.yaml"));
+// Cargar swagger e inyectar la URL pública del servidor desde la variable de entorno.
+// Esto evita que Swagger UI use "localhost" cuando la app corre en un servidor real.
+const swaggerDocument = YAML.load(path.resolve(process.cwd(), "swagger.yaml")) as Record<string, unknown>;
+if (swaggerDocument && env.publicUrl) {
+  swaggerDocument.servers = [{ url: env.publicUrl, description: "Servidor activo" }];
+}
 
 // -- CORS (para front en otro dominio/puerto) ------------------------------
 // El front envía Authorization y eso dispara preflight OPTIONS.
@@ -63,6 +68,13 @@ app.use((req, res, next) => {
 // Rutas públicas (sin autenticación)
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+// Configuración pública para el frontend: devuelve la URL base de la API.
+// El frontend puede llamar a este endpoint al arrancar para obtener la URL correcta
+// sin necesidad de hardcodear "localhost" ni la IP del servidor.
+app.get("/api/config", (_req: Request, res: Response) => {
+  res.json({ api_base_url: env.publicUrl });
 });
 
 app.get("/chat", (_req: Request, res: Response) => {

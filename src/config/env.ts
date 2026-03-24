@@ -51,6 +51,8 @@ const parsedDbUrl = parseSqlServerDatabaseUrl(process.env.DATABASE_URL);
 export const env = {
   port: Number(process.env.PORT ?? 3000),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 30_000),
+  // URL pública del servidor (sin barra final). Usada en Swagger UI y para configurar el frontend.
+  publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, ""),
   
   // -- CORS -----------------------------------------------------------------
   // Lista separada por comas con los orígenes permitidos para el frontend.
