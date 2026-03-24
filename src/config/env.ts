@@ -52,7 +52,24 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
   requestTimeoutMs: Number(process.env.REQUEST_TIMEOUT_MS ?? 30_000),
   // URL pública del servidor (sin barra final). Usada en Swagger UI y para configurar el frontend.
-  publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, ""),
+  // Si PUBLIC_URL ya incluye puerto lo usa tal cual.
+  // Si PUBLIC_URL no tiene puerto y el PORT no es 80/443, lo añade automáticamente.
+  // Si PUBLIC_URL no está definida, construye http://localhost:PORT como fallback.
+  publicUrl: (() => {
+    const port = Number(process.env.PORT ?? 3000);
+    const raw = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
+    if (!raw) return `http://localhost:${port}`;
+    // Comprobar si ya tiene puerto (ej: http://192.168.0.1:8000)
+    try {
+      const u = new URL(raw);
+      if (u.port) return raw; // ya tiene puerto explícito
+      // Sin puerto: añadirlo si no es el estándar del protocolo
+      const isDefaultPort = (u.protocol === "http:" && port === 80) || (u.protocol === "https:" && port === 443);
+      return isDefaultPort ? raw : `${raw}:${port}`;
+    } catch {
+      return raw; // URL no parseable: devolver tal cual
+    }
+  })(),
   
   // -- CORS -----------------------------------------------------------------
   // Lista separada por comas con los orígenes permitidos para el frontend.

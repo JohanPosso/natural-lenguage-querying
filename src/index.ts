@@ -135,8 +135,10 @@ app.get("/api/debug/summary", getDebugSummaryController);
 
 app.listen(env.port, () => {
   console.log(`API listening on port ${env.port}`);
-  console.log(`Chat UI available at http://localhost:${env.port}/chat`);
-  console.log(`Log viewer  available at http://localhost:${env.port}/logs.html`);
+  console.log(`Public URL: ${env.publicUrl}`);
+  console.log(`Chat UI:    ${env.publicUrl}/chat`);
+  console.log(`Swagger UI: ${env.publicUrl}/api/docs`);
+  console.log(`Log viewer: ${env.publicUrl}/logs.html`);
   if (env.bypassAuth) {
     console.warn("[auth] [WARN] BYPASS_AUTH=true — autenticación DESACTIVADA (solo desarrollo)");
   } else {
