@@ -21,6 +21,7 @@ export type StoredMessage = {
 class ChatPersistenceService {
   private initialized = false;
   private conversationHasTitle = false;
+  private conversationHasUserId = false;
   private messageHasPayload = false;
   private messageHasSequence = false;
 
@@ -29,7 +30,7 @@ class ChatPersistenceService {
       return;
     }
 
-    // Create base tables if they don't exist
+    // Tablas base
     await pool.request().query(`
       IF OBJECT_ID('dbo.conversations', 'U') IS NULL
       BEGIN
@@ -59,7 +60,7 @@ class ChatPersistenceService {
       END;
     `);
 
-    // Incremental migrations — safe to re-run (idempotent)
+    // Migraciones incrementales — seguras para re-ejecutar (idempotentes)
     await pool.request().query(`
       IF COL_LENGTH('dbo.conversations', 'title') IS NULL
         ALTER TABLE dbo.conversations ADD title NVARCHAR(255) NULL;
@@ -70,7 +71,16 @@ class ChatPersistenceService {
         ALTER TABLE dbo.messages ADD payload NVARCHAR(MAX) NULL;
     `);
 
-    // Inspect actual schema to set capability flags — guards all INSERT/SELECT queries
+    // Migración: añadir user_id a conversations para aislar datos por usuario
+    await pool.request().query(`
+      IF COL_LENGTH('dbo.conversations', 'user_id') IS NULL
+      BEGIN
+        ALTER TABLE dbo.conversations ADD user_id NVARCHAR(255) NULL;
+        CREATE INDEX IX_conversations_user_id ON dbo.conversations (user_id);
+      END;
+    `);
+
+    // Inspeccionar esquema real para activar flags de capacidad
     const schemaResult = await pool.request().query(`
       SELECT TABLE_NAME, COLUMN_NAME
       FROM INFORMATION_SCHEMA.COLUMNS
@@ -82,18 +92,17 @@ class ChatPersistenceService {
         (row) => String(row.TABLE_NAME) === tableName && String(row.COLUMN_NAME) === columnName
       );
 
-    this.conversationHasTitle = hasColumn("conversations", "title");
-    this.messageHasPayload = hasColumn("messages", "payload");
-    this.messageHasSequence = hasColumn("messages", "sequence");
+    this.conversationHasTitle  = hasColumn("conversations", "title");
+    this.conversationHasUserId = hasColumn("conversations", "user_id");
+    this.messageHasPayload     = hasColumn("messages", "payload");
+    this.messageHasSequence    = hasColumn("messages", "sequence");
 
-    // Only set initialized if ALL expected columns are present
-    // If any migration failed silently, we'll retry next request
-    if (this.messageHasPayload && this.conversationHasTitle) {
+    if (this.messageHasPayload && this.conversationHasTitle && this.conversationHasUserId) {
       this.initialized = true;
     }
 
     console.log(
-      `[chatPersistence] Schema OK — title:${this.conversationHasTitle} payload:${this.messageHasPayload} sequence:${this.messageHasSequence}`
+      `[chatPersistence] Schema OK — title:${this.conversationHasTitle} user_id:${this.conversationHasUserId} payload:${this.messageHasPayload} sequence:${this.messageHasSequence}`
     );
   }
 
@@ -103,23 +112,32 @@ class ChatPersistenceService {
     return pool;
   }
 
-  async listConversations(limit = 50): Promise<StoredConversation[]> {
+  /**
+   * Lista las conversaciones del usuario.
+   * Si userId no se proporciona, devuelve solo las conversaciones sin user_id (legacy).
+   */
+  async listConversations(userId: string, limit = 50): Promise<StoredConversation[]> {
     const pool = await this.getReadyPool();
     const safeLimit = Math.min(Math.max(limit, 1), 200);
+
+    const userIdFilter = this.conversationHasUserId
+      ? "WHERE user_id = @userId"
+      : "";
+
     const result = await pool
       .request()
       .input("limit", safeLimit)
-      .query(
-        `
+      .input("userId", userId)
+      .query(`
         SELECT TOP (@limit)
           id,
           ${this.conversationHasTitle ? "title" : "CAST(NULL AS NVARCHAR(255)) AS title"},
           created_at,
           updated_at
         FROM dbo.conversations
+        ${userIdFilter}
         ORDER BY updated_at DESC;
-      `
-      );
+      `);
 
     return result.recordset.map((row) => ({
       id: String(row.id),
@@ -129,27 +147,28 @@ class ChatPersistenceService {
     }));
   }
 
-  async createConversation(title?: string): Promise<StoredConversation> {
+  /**
+   * Crea una conversación asociada al usuario.
+   */
+  async createConversation(title?: string, userId?: string): Promise<StoredConversation> {
     const pool = await this.getReadyPool();
     const id = randomUUID();
     const finalTitle = title?.trim() || null;
+    const finalUserId = userId ?? null;
 
     const req = pool.request().input("id", id);
-    if (this.conversationHasTitle) {
-      req.input("title", finalTitle);
-    }
-    await req.query(
-      `
-        INSERT INTO dbo.conversations (id, ${this.conversationHasTitle ? "title," : ""} updated_at)
-        VALUES (@id, ${this.conversationHasTitle ? "@title," : ""} SYSUTCDATETIME());
-      `
-    );
+    if (this.conversationHasTitle) req.input("title", finalTitle);
+    if (this.conversationHasUserId) req.input("userId", finalUserId);
 
-    const rows = await this.listConversations(1);
-    const created = rows.find((item) => item.id === id);
-    if (created) {
-      return created;
-    }
+    const titleCol  = this.conversationHasTitle  ? "title,"   : "";
+    const titleVal  = this.conversationHasTitle  ? "@title,"  : "";
+    const userCol   = this.conversationHasUserId ? "user_id," : "";
+    const userVal   = this.conversationHasUserId ? "@userId," : "";
+
+    await req.query(`
+      INSERT INTO dbo.conversations (id, ${titleCol} ${userCol} updated_at)
+      VALUES (@id, ${titleVal} ${userVal} SYSUTCDATETIME());
+    `);
 
     return {
       id,
@@ -159,13 +178,37 @@ class ChatPersistenceService {
     };
   }
 
-  async getConversationMessages(conversationId: string): Promise<StoredMessage[]> {
+  /**
+   * Devuelve los mensajes de una conversación.
+   * Si se proporciona userId, verifica que la conversación le pertenezca (403 si no).
+   */
+  async getConversationMessages(
+    conversationId: string,
+    userId?: string
+  ): Promise<StoredMessage[]> {
     const pool = await this.getReadyPool();
+
+    // Verificar propiedad si tenemos user_id y userId
+    if (this.conversationHasUserId && userId) {
+      const ownerCheck = await pool
+        .request()
+        .input("conversationId", conversationId)
+        .input("userId", userId)
+        .query(`
+          SELECT COUNT(1) AS cnt
+          FROM dbo.conversations
+          WHERE id = @conversationId AND (user_id = @userId OR user_id IS NULL);
+        `);
+      const cnt = Number(ownerCheck.recordset?.[0]?.cnt ?? 0);
+      if (cnt === 0) {
+        throw Object.assign(new Error("Conversation not found or access denied."), { statusCode: 404 });
+      }
+    }
+
     const result = await pool
       .request()
       .input("conversationId", conversationId)
-      .query(
-        `
+      .query(`
         SELECT
           id,
           conversation_id,
@@ -176,8 +219,7 @@ class ChatPersistenceService {
         FROM dbo.messages
         WHERE conversation_id = @conversationId
         ORDER BY ${this.messageHasSequence ? "sequence ASC, " : ""}created_at ASC;
-      `
-      );
+      `);
 
     return result.recordset.map((row) => ({
       id: String(row.id),
@@ -218,39 +260,33 @@ class ChatPersistenceService {
       .input("conversationId", conversationId)
       .input("role", role)
       .input("content", content);
-    if (this.messageHasPayload) {
-      request.input("payload", payloadJson);
-    }
-    if (this.messageHasSequence) {
-      request.input("sequence", nextSequence);
-    }
+    if (this.messageHasPayload)  request.input("payload", payloadJson);
+    if (this.messageHasSequence) request.input("sequence", nextSequence);
 
-    await request.query(
-      `
-        INSERT INTO dbo.messages (
-          id,
-          conversation_id,
-          role,
-          content,
-          ${this.messageHasSequence ? "sequence," : ""}
-          ${this.messageHasPayload ? "payload," : ""}
-          created_at
-        )
-        VALUES (
-          @id,
-          @conversationId,
-          @role,
-          @content,
-          ${this.messageHasSequence ? "@sequence," : ""}
-          ${this.messageHasPayload ? "@payload," : ""}
-          SYSUTCDATETIME()
-        );
+    await request.query(`
+      INSERT INTO dbo.messages (
+        id,
+        conversation_id,
+        role,
+        content,
+        ${this.messageHasSequence ? "sequence," : ""}
+        ${this.messageHasPayload  ? "payload,"  : ""}
+        created_at
+      )
+      VALUES (
+        @id,
+        @conversationId,
+        @role,
+        @content,
+        ${this.messageHasSequence ? "@sequence," : ""}
+        ${this.messageHasPayload  ? "@payload,"  : ""}
+        SYSUTCDATETIME()
+      );
 
-        UPDATE dbo.conversations
-        SET updated_at = SYSUTCDATETIME()
-        WHERE id = @conversationId;
-      `
-    );
+      UPDATE dbo.conversations
+      SET updated_at = SYSUTCDATETIME()
+      WHERE id = @conversationId;
+    `);
 
     return {
       id,
@@ -262,8 +298,27 @@ class ChatPersistenceService {
     };
   }
 
-  async deleteConversation(conversationId: string): Promise<boolean> {
+  /**
+   * Elimina una conversación. Verifica que pertenezca al userId si se proporciona.
+   */
+  async deleteConversation(conversationId: string, userId?: string): Promise<boolean> {
     const pool = await this.getReadyPool();
+
+    // Verificar propiedad antes de borrar
+    if (this.conversationHasUserId && userId) {
+      const ownerCheck = await pool
+        .request()
+        .input("conversationId", conversationId)
+        .input("userId", userId)
+        .query(`
+          SELECT COUNT(1) AS cnt
+          FROM dbo.conversations
+          WHERE id = @conversationId AND (user_id = @userId OR user_id IS NULL);
+        `);
+      const cnt = Number(ownerCheck.recordset?.[0]?.cnt ?? 0);
+      if (cnt === 0) return false;
+    }
+
     const result = await pool
       .request()
       .input("conversationId", conversationId)

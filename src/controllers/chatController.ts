@@ -12,10 +12,11 @@ function titleFromQuestion(question: string): string {
   return `${normalized.slice(0, 77)}...`;
 }
 
-export async function listConversationsController(_req: Request, res: Response): Promise<Response> {
+export async function listConversationsController(req: Request, res: Response): Promise<Response> {
   try {
-    const conversations = await chatPersistenceService.listConversations();
-    await debugLogger.log("chat", "list_conversations", { count: conversations.length });
+    const userId = req.userId ?? "anonymous";
+    const conversations = await chatPersistenceService.listConversations(userId);
+    await debugLogger.log("chat", "list_conversations", { userId, count: conversations.length });
     return res.status(200).json({ conversations });
   } catch (error) {
     await debugLogger.log("chat", "list_conversations_error", { error: (error as Error).message });
@@ -28,9 +29,11 @@ export async function listConversationsController(_req: Request, res: Response):
 
 export async function createConversationController(req: Request, res: Response): Promise<Response> {
   try {
+    const userId = req.userId ?? "anonymous";
     const title = String(req.body?.title ?? "").trim();
-    const conversation = await chatPersistenceService.createConversation(title || undefined);
+    const conversation = await chatPersistenceService.createConversation(title || undefined, userId);
     await debugLogger.log("chat", "create_conversation", {
+      userId,
       conversation_id: conversation.id,
       title: conversation.title
     });
@@ -50,16 +53,19 @@ export async function listMessagesController(req: Request, res: Response): Promi
     if (!conversationId) {
       return res.status(400).json({ error: "Conversation id is required." });
     }
-    const messages = await chatPersistenceService.getConversationMessages(conversationId);
+    const userId = req.userId ?? "anonymous";
+    const messages = await chatPersistenceService.getConversationMessages(conversationId, userId);
     await debugLogger.log("chat", "list_messages", {
+      userId,
       conversation_id: conversationId,
       count: messages.length
     });
     return res.status(200).json({ messages });
   } catch (error) {
+    const statusCode = (error as { statusCode?: number }).statusCode ?? 500;
     await debugLogger.log("chat", "list_messages_error", { error: (error as Error).message });
-    return res.status(500).json({
-      code: "CHAT_MESSAGES_ERROR",
+    return res.status(statusCode).json({
+      code: statusCode === 404 ? "CHAT_NOT_FOUND" : "CHAT_MESSAGES_ERROR",
       error: (error as Error).message
     });
   }
@@ -72,12 +78,13 @@ export async function deleteConversationController(req: Request, res: Response):
       return res.status(400).json({ error: "Conversation id is required." });
     }
 
-    const removed = await chatPersistenceService.deleteConversation(conversationId);
+    const userId = req.userId ?? "anonymous";
+    const removed = await chatPersistenceService.deleteConversation(conversationId, userId);
     if (!removed) {
       return res.status(404).json({ error: "Conversation not found." });
     }
 
-    await debugLogger.log("chat", "delete_conversation", { conversation_id: conversationId });
+    await debugLogger.log("chat", "delete_conversation", { userId, conversation_id: conversationId });
     return res.status(200).json({ ok: true, id: conversationId });
   } catch (error) {
     await debugLogger.log("chat", "delete_conversation_error", { error: (error as Error).message });
@@ -91,6 +98,7 @@ export async function deleteConversationController(req: Request, res: Response):
 export async function askInConversationController(req: Request, res: Response): Promise<Response> {
   try {
     const traceId = randomUUID();
+    const userId = req.userId ?? "anonymous";
     const question = String(req.body?.question ?? req.body?.user_prompt ?? "").trim();
     if (!question) {
       return res.status(400).json({ error: "Field question (or user_prompt) is required." });
@@ -98,22 +106,35 @@ export async function askInConversationController(req: Request, res: Response): 
 
     let conversationId = String(req.body?.conversation_id ?? "").trim();
     if (!conversationId) {
-      const created = await chatPersistenceService.createConversation(titleFromQuestion(question));
+      // Crear conversación nueva vinculada al usuario
+      const created = await chatPersistenceService.createConversation(titleFromQuestion(question), userId);
       conversationId = created.id;
+    } else {
+      // Verificar que la conversación existente pertenece al usuario
+      try {
+        await chatPersistenceService.getConversationMessages(conversationId, userId);
+      } catch {
+        return res.status(404).json({
+          code: "CHAT_NOT_FOUND",
+          error: "Conversation not found or does not belong to this user."
+        });
+      }
     }
+
     await debugLogger.log("chat", "conversation_question_received", {
       traceId,
+      userId,
       conversation_id: conversationId,
       question
     });
 
     await chatPersistenceService.addMessage(conversationId, "user", question);
 
-    // Retrieve conversation history (excluding the just-saved user message = last entry)
+    // Historial de conversación (excluye el mensaje que acabamos de guardar)
     const allMessages = await chatPersistenceService.getConversationMessages(conversationId);
-    const historyMessages = allMessages.slice(0, -1); // all except the current user msg
+    const historyMessages = allMessages.slice(0, -1);
     const conversationHistory: ConversationTurn[] = historyMessages
-      .slice(-8) // last 4 exchanges (8 messages)
+      .slice(-8) // últimos 4 intercambios (8 mensajes)
       .map((m) => {
         const turn: ConversationTurn = { role: m.role, content: m.content };
         if (m.payload) {
@@ -122,7 +143,7 @@ export async function askInConversationController(req: Request, res: Response): 
             turn.cube = p.data?.cube ?? null;
             turn.measure = p.data?.measure ?? null;
           } catch {
-            // ignore parse errors
+            // ignorar errores de parse
           }
         }
         return turn;
@@ -136,6 +157,7 @@ export async function askInConversationController(req: Request, res: Response): 
     await chatPersistenceService.addMessage(conversationId, "assistant", payload.answer, payload);
     await debugLogger.log("chat", "conversation_answer_sent", {
       traceId,
+      userId,
       conversation_id: conversationId,
       answer: payload.answer
     });
