@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { mdxBridgeService } from "../services/mdxBridgeService";
 import { catalogService } from "../services/catalogService";
+import { memberValueService } from "../services/memberValueService";
 import type { XmlaManifest } from "../services/catalogService";
 import { debugLogger } from "../services/debugLogger";
 import * as interpreterAgent from "../agents/interpreterAgent";
@@ -175,7 +176,7 @@ function prefilterCubesByIntent(
   rawQuestion: string,
   topN: number,
   prevCubeName?: string | null
-): ManifestCube[] {
+): { cubes: ManifestCube[]; recommendedCubeName: string | null } {
   const scored = cubes.map((cube) => {
     let score = 0;
 
@@ -253,17 +254,26 @@ function prefilterCubesByIntent(
 
   // Fall back to raw question token scoring if intent signals don't distinguish
   if (scored.every(({ score }) => score === 0 || score === 20)) {
-    return prefilterCubes({ cubes } as XmlaManifest, rawQuestion, topN, prevCubeName);
+    return { cubes: prefilterCubes({ cubes } as XmlaManifest, rawQuestion, topN, prevCubeName), recommendedCubeName: null };
   }
 
   const sorted = scored.sort((a, b) => b.score - a.score);
+  const topCube = sorted[0];
+  // Solo emitir recomendación si el cubo líder tiene ventaja clara (> 10 pts sobre el segundo)
+  const secondScore = sorted[1]?.score ?? 0;
+  const recommendedCubeName =
+    topCube && topCube.score - secondScore >= 10 ? topCube.cube.cubeName : null;
+
   // Con pocos cubos disponibles (≤5), enviar TODOS al mapper aunque tengan score 0
   // El mapper tiene más contexto y puede decidir mejor que el scoring simple.
   if (cubes.length <= 5) {
-    return sorted.map(({ cube }) => cube);
+    return { cubes: sorted.map(({ cube }) => cube), recommendedCubeName };
   }
   const topScored = sorted.filter(({ score }) => score > 0).slice(0, topN);
-  return topScored.length ? topScored.map(({ cube }) => cube) : cubes.slice(0, topN);
+  return {
+    cubes: topScored.length ? topScored.map(({ cube }) => cube) : cubes.slice(0, topN),
+    recommendedCubeName
+  };
 }
 
 function prefilterMeasures(cube: ManifestCube, question: string, topN: number): ManifestMember[] {
@@ -376,9 +386,15 @@ function buildMeasureSemanticNote(cube: ManifestCube): string {
 
 async function buildCatalogContextWithHierarchies(
   cubes: ManifestCube[],
-  question: string
+  question: string,
+  recommendedCubeName?: string
 ): Promise<string> {
   const lines: string[] = [];
+
+  if (recommendedCubeName) {
+    lines.push(`[RECOMENDACION DEL SISTEMA] Para esta consulta genérica (sin marca específica), el cubo más adecuado es: "${recommendedCubeName}". Usa ese cubo salvo que la pregunta mencione explícitamente otra marca o cubo.`);
+    lines.push("");
+  }
 
   for (const cube of cubes) {
     lines.push(
@@ -526,6 +542,25 @@ async function resolveFilters(
     for (const rawValue of filter.values) {
       if (!rawValue) continue;
       try {
+        // Strategy 0: local cached member values in SQL (faster + more deterministic)
+        const localBest = await memberValueService.resolveMember(
+          cube.catalog,
+          cube.xmlaCubeName,
+          filter.hierarchy_mdx,
+          rawValue
+        );
+
+        if (localBest) {
+          resolvedMembers.push({ value_caption: localBest.caption, member_unique_name: localBest.uniqueName });
+          await debugLogger.log("ask", "filter_resolved_local", {
+            traceId,
+            hierarchy: filter.hierarchy_mdx,
+            value: rawValue,
+            resolved: localBest.uniqueName
+          });
+          continue;
+        }
+
         const best = await mdxBridgeService.findBestMemberByCaption(
           cube.catalog,
           cube.xmlaCubeName,
@@ -877,7 +912,8 @@ async function generateNaturalResponse(
   results: MeasureResult[],
   selection: LlmSelection,
   unresolvedFilters: Array<{ hierarchy_mdx: string; friendly_name: string; values: string[] }>,
-  filterExpansions: FilterExpansion[] = []
+  filterExpansions: FilterExpansion[] = [],
+  traceId = "unknown"
 ): Promise<string> {
   const ssasResults: responseAgent.SsasResult[] = results.map((r) => ({
     measure_name: r.friendly_name,
@@ -900,7 +936,7 @@ async function generateNaturalResponse(
       return acc;
     }, []);
 
-  return responseAgent.generate({
+  const responseCtx = {
     originalQuestion: question,
     cubeName: selection.cube_name,
     results: ssasResults,
@@ -914,7 +950,25 @@ async function generateNaturalResponse(
       expanded: e.expanded,
       friendly_name: e.friendly_name
     }))
+  };
+
+  await debugLogger.log("ask", "worker_agent_call", {
+    traceId,
+    cube: selection.cube_name,
+    results_count: ssasResults.length,
+    applied_filters: appliedFilters.map((f) => `${f.friendly_name}=${f.values.join(",")}`),
+    unresolved_count: unresolvedFilters.length
   });
+
+  const answer = await responseAgent.generate(responseCtx);
+
+  await debugLogger.log("ask", "worker_agent_response", {
+    traceId,
+    answer_length: answer.length,
+    answer_preview: answer.slice(0, 120)
+  });
+
+  return answer;
 }
 
 // -- Main Pipeline ------------------------------------------------------------
@@ -1134,17 +1188,22 @@ export async function runAskPipeline(
   }
 
   // -- Step 2: Pre-filter candidate cubes using intent signals (improved) ------
-  const candidateCubes = prefilterCubesByIntent(visibleCubes, intent, prompt, 5, prevCubeName);
+  const { cubes: candidateCubes, recommendedCubeName } = prefilterCubesByIntent(visibleCubes, intent, prompt, 5, prevCubeName);
   await debugLogger.log("ask", "candidate_cubes", {
     traceId,
     cubes: candidateCubes.map((c) => c.cubeName),
+    recommended: recommendedCubeName,
     prevCubeName,
     intentDomain: intent.domain
   });
   if (prevCubeName) {
     pLog("[CTX]", CYAN, "Contexto conversación", `cubo anterior: "${prevCubeName}"`);
   }
-  pLog("[CANDIDATES]", BLUE, "Candidatos", candidateCubes.map((c) => c.cubeName).join(" | "));
+  if (recommendedCubeName) {
+    pLog("[CANDIDATES]", BLUE, "Candidatos", `${candidateCubes.map((c) => c.cubeName).join(" | ")} | [RECOMENDADO: ${recommendedCubeName}]`);
+  } else {
+    pLog("[CANDIDATES]", BLUE, "Candidatos", candidateCubes.map((c) => c.cubeName).join(" | "));
+  }
 
   // If the user asked about a specific brand/cube that isn't in their visible cubes, warn them
   if (intent.preferredCube) {
@@ -1224,7 +1283,7 @@ export async function runAskPipeline(
 
   // -- Step 3: Build catalog context enriched with SSAS hierarchy paths ---------
   pLog("[BUILD] ", BLUE, "Construyendo catálogo con jerarquías SSAS...");
-  const catalogContext = await buildCatalogContextWithHierarchies(candidateCubes, prompt);
+  const catalogContext = await buildCatalogContextWithHierarchies(candidateCubes, prompt, recommendedCubeName ?? undefined);
 
   // -- Step 4: Agent 2 — Mapper: map intent to exact catalog elements -----------
   pLog("[MAP] ", MAGENTA, "Agent 2 (Mapeador): seleccionando cubo, medidas y filtros...");
@@ -1456,7 +1515,7 @@ export async function runAskPipeline(
 
   // -- Step 9: Agent 3 — Response: format final answer ------------------------
   pLog("[WRITE] ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
-  const answer = await generateNaturalResponse(prompt, allResults, selection, unresolvedFilters, filterExpansions);
+  const answer = await generateNaturalResponse(prompt, allResults, selection, unresolvedFilters, filterExpansions, traceId);
   const primary = allResults[0];
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

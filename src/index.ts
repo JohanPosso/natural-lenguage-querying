@@ -19,6 +19,8 @@ import {
   listGlobalRulesController,
   updateGlobalRuleController
 } from "./controllers/globalRulesController";
+import { memberValueService } from "./services/memberValueService";
+import { xmlaSyncService } from "./services/xmlaSyncService";
 
 const app = express();
 app.use(express.json());
@@ -90,6 +92,30 @@ app.get("/api/global-rules", authMiddleware, listGlobalRulesController);
 app.post("/api/global-rules", authMiddleware, createGlobalRuleController);
 app.patch("/api/global-rules/:id", authMiddleware, updateGlobalRuleController);
 app.delete("/api/global-rules/:id", authMiddleware, deleteGlobalRuleController);
+
+// Admin: cobertura y re-sync de member values (sin auth, solo uso interno/servidor)
+app.get("/api/admin/member-values/coverage", async (_req, res) => {
+  try {
+    const data = await memberValueService.coverage();
+    const total = data.reduce((s, r) => s + r.members, 0);
+    res.json({ total_members: total, cubes: data });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+app.post("/api/admin/member-values/sync", async (_req, res) => {
+  try {
+    console.log("[memberValues] Re-sync solicitado via API admin...");
+    const result = await memberValueService.syncFromSsas(
+      (requestType, restrictions, catalog) =>
+        xmlaSyncService.discoverRows(requestType, restrictions, catalog)
+    );
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
 
 // Debug — solo accesible internamente (sin auth para facilitar monitoreo)
 app.get("/api/debug/logs", getDebugLogsController);

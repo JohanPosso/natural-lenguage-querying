@@ -19,6 +19,7 @@ dotenv.config();
 
 import { catalogService } from "../services/catalogService";
 import { xmlaSyncService } from "../services/xmlaSyncService";
+import { memberValueService } from "../services/memberValueService";
 
 async function main() {
   console.log("=".repeat(60));
@@ -35,6 +36,10 @@ async function main() {
       (requestType, restrictions, catalog) =>
         xmlaSyncService.discoverRows(requestType, restrictions, catalog)
     );
+    const memberValueResult = await memberValueService.syncFromSsas(
+      (requestType, restrictions, catalog) =>
+        xmlaSyncService.discoverRows(requestType, restrictions, catalog)
+    );
 
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log("");
@@ -43,6 +48,8 @@ async function main() {
     console.log(`   Cubos:       ${result.cubes}`);
     console.log(`   Miembros:    ${result.members}`);
     console.log(`   Jerarquías:  ${result.hierarchies}`);
+    console.log(`   Jerarquías (values): ${memberValueResult.hierarchies}`);
+    console.log(`   Valores de miembros: ${memberValueResult.members}`);
     console.log("=".repeat(60));
     process.exit(0);
   } catch (err) {

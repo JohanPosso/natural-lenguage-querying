@@ -142,6 +142,16 @@ COMPARACIÓN TEMPORAL:
 
 // -- Agent function -------------------------------------------------------------
 
+/** Extrae el tiempo de espera en ms desde un error 429 (retry-after o backoff fijo) */
+function extract429WaitMs(err: unknown, attempt: number): number {
+  const msg = String((err as Error)?.message ?? "");
+  // Intenta leer "retry-after: N" en el mensaje de error
+  const retryMatch = msg.match(/retry[_-]after[:\s]+(\d+)/i);
+  if (retryMatch) return Number(retryMatch[1]) * 1000 + 500;
+  // Backoff exponencial: 8s, 20s, 45s
+  return [8000, 20000, 45000][Math.min(attempt - 1, 2)];
+}
+
 export async function generate(ctx: ResponseContext): Promise<string> {
   if (ctx.results.length === 0) {
     return buildEmptyResponse(ctx);
@@ -149,29 +159,34 @@ export async function generate(ctx: ResponseContext): Promise<string> {
 
   const userMessage = buildUserMessage(ctx);
 
-  console.log(`[Agent3:Redactor] agente=${env.azureWorkerAgentId}`);
+  console.log(`[Agent3:Redactor] agente=${env.azureWorkerAgentId} resultados=${ctx.results.length}`);
 
-  // Dos intentos — el segundo usa un prompt más corto si el primero falla
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // Hasta 3 intentos con backoff exponencial para errores 429
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const response = await callAgent(
-        env.azureWorkerAgentId,
-        RESPONSE_INSTRUCTIONS,
-        attempt === 1 ? userMessage : buildCompactMessage(ctx)
-      );
+      const msg = attempt === 1 ? userMessage : buildCompactMessage(ctx);
+      const response = await callAgent(env.azureWorkerAgentId, RESPONSE_INSTRUCTIONS, msg);
       if (response && response.trim().length > 30) {
+        console.log(`[Agent3:Redactor] OK en intento ${attempt}`);
         return sanitizeResponse(response.trim());
       }
       console.warn(`[Agent3:Redactor] intento ${attempt}: respuesta vacía o muy corta`);
     } catch (err) {
-      console.error(`[Agent3:Redactor] intento ${attempt} error:`, (err as Error).message);
-      if (attempt === 2) break;
-      await new Promise((r) => setTimeout(r, 1500));
+      const msg = (err as Error).message ?? "";
+      const is429 = msg.includes("429") || msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("too many");
+      console.warn(`[Agent3:Redactor] intento ${attempt}/${MAX_ATTEMPTS} ${is429 ? "[429 rate-limit]" : "[error]"}: ${msg}`);
+
+      if (attempt < MAX_ATTEMPTS) {
+        const waitMs = is429 ? extract429WaitMs(err, attempt) : 2000;
+        console.log(`[Agent3:Redactor] esperando ${(waitMs / 1000).toFixed(1)}s antes del siguiente intento...`);
+        await new Promise((r) => setTimeout(r, waitMs));
+      }
     }
   }
 
   // Fallback conversacional — nunca bullet points
-  console.warn("[Agent3:Redactor] usando fallback conversacional");
+  console.warn("[Agent3:Redactor] usando fallback conversacional tras agotar reintentos");
   return buildFallbackResponse(ctx);
 }
 
