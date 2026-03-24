@@ -104,17 +104,21 @@ export async function authMiddleware(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  // En modo de desarrollo se puede omitir la autenticación
-  if (env.bypassAuth) {
-    console.warn("[auth] BYPASS_AUTH activo — omitiendo validación de token");
+  // BYPASS_AUTH solo funciona en entornos de desarrollo (NODE_ENV !== 'production').
+  // En producción se ignora aunque esté configurado, protegiendo a todos los usuarios.
+  const isProduction = process.env.NODE_ENV === "production";
+  if (env.bypassAuth && !isProduction) {
+    console.warn("[auth] BYPASS_AUTH activo — omitiendo validación de token (SOLO DESARROLLO)");
     req.userId = "bypass-user";
-    req.allowedCubes = null; // null = acceso a todos los cubos
+    req.allowedCubes = null;
     return next();
+  }
+  if (env.bypassAuth && isProduction) {
+    console.error("[auth] BYPASS_AUTH=true ignorado en producción — aplicando autenticación completa");
   }
 
   const authHeader = req.headers.authorization;
 
-  // Si no hay header pero hay token de prueba configurado, usarlo como fallback
   let token: string;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     if (env.devTestToken) {
@@ -128,7 +132,7 @@ export async function authMiddleware(
       return;
     }
   } else {
-    token = authHeader.slice(7); // quitar "Bearer "
+    token = authHeader.slice(7);
   }
 
   try {
@@ -136,6 +140,9 @@ export async function authMiddleware(
     const { userId } = decodeTokenPayload(token);
 
     // 2. Validar token y obtener permisos desde el API Launcher
+    //    SIEMPRE se consulta el Launcher — es la única fuente de verdad de permisos.
+    //    Esto aplica también al DEV_TEST_TOKEN: los cubos permitidos los decide el Launcher,
+    //    nunca el backend por su cuenta.
     const permissions = await fetchPermissionsFromLauncher(token, userId);
 
     // 3. Extraer cubos permitidos

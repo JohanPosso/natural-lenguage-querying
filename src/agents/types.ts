@@ -38,9 +38,21 @@ export type QueryIntent = {
   entities: QueryEntity[];
   /** Filtros temporales explícitos */
   timeFilters: {
-    year?: string;   // "2025"
-    month?: string;  // "Enero" (capitalizado en español)
+    year?: string;    // "2025" — un único año
+    years?: string[]; // ["2024","2025"] — cuando el usuario menciona varios años
+    month?: string;   // "Enero" (capitalizado en español)
   };
+  /**
+   * true cuando el usuario pide un DESGLOSE (listado de valores por dimensión).
+   * Ejemplos: "listado por años", "desglose por provincia", "todos los meses", "por cada año".
+   * Cuando es true, breakdownDimension indica QUÉ dimensión usar para el desglose.
+   */
+  isBreakdown?: boolean;
+  /**
+   * Dimensión por la que el usuario quiere el desglose. Solo relleno cuando isBreakdown=true.
+   * Expresado como concepto semántico ("año", "mes", "provincia", "segmento", "marca").
+   */
+  breakdownDimension?: string | null;
   /**
    * Si el usuario mencionó explícitamente un cubo o una marca/producto que sugiere uno.
    * Ej: "en el cubo Nissan", "datos de Renault Trucks".

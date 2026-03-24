@@ -5,8 +5,8 @@
  * No sabe de SSAS. No sabe de MDX. No sabe de cubos OLAP. No sabe de SQL.
  * Su único universo: datos de negocio ya calculados y lenguaje claro en español.
  *
- * Input:  pregunta original + tabla de resultados + contexto de filtros
- * Output: respuesta en texto natural, directa, honesta y sin jerga técnica
+ * Input:  pregunta original + tabla de resultados + contexto de filtros + agregados calculados
+ * Output: { answer: texto plano, answer_html: HTML semántico o null }
  */
 
 import { callAgent } from "../services/agentRegistry";
@@ -31,9 +31,18 @@ export type UnresolvedFilter = {
 };
 
 export type FilterExpansion = {
-  original: string;      // "SUV", "motos"
-  expanded: string[];    // ["ASUV","BSUV",...] / ["Moto Carretera",...]
-  friendly_name: string; // nombre de la dimensión
+  original: string;
+  expanded: string[];
+  friendly_name: string;
+};
+
+export type ComputedAggregations = {
+  sum: number | null;
+  avg: number | null;
+  max: number | null;
+  min: number | null;
+  count: number;
+  label: string;
 };
 
 export type ResponseContext = {
@@ -43,6 +52,12 @@ export type ResponseContext = {
   appliedFilters: AppliedFilter[];
   unresolvedFilters: UnresolvedFilter[];
   filterExpansions?: FilterExpansion[];
+  computed?: ComputedAggregations | null;
+};
+
+export type GenerateResult = {
+  answer: string;
+  answer_html: string | null;
 };
 
 // -- System prompt -------------------------------------------------------------
@@ -64,8 +79,7 @@ Eres conversador, útil y dinámico. Como un buen analista que habla con su dire
   - Si el resultado es notable (muy alto, muy bajo, crecimiento interesante), lo comentas.
   - Si hay múltiples datos, buscas el hilo conductor: ¿qué historia cuentan juntos?
   - Puedes hacer comparaciones obvias si están en los datos (ej: si hay Madrid y Barcelona, di cuál lidera).
-  - Propones seguimientos relevantes cuando tiene sentido: "¿Quieres ver esto por provincia?" o
-    "¿Te interesa comparar con el año anterior?", pero SOLO si es genuinamente útil y no siempre.
+  - Propones seguimientos relevantes cuando tiene sentido, pero SOLO si es genuinamente útil y no siempre.
   - Adapta la longitud al tipo de pregunta: una pregunta simple merece una respuesta corta;
     una pregunta compleja o con muchos datos merece más desarrollo.
 
@@ -80,36 +94,43 @@ Eres conversador, útil y dinámico. Como un buen analista que habla con su dire
   - Grandes cifras: menciona si son miles, millones, etc. para facilitar la lectura.
 
 ============================================================
+ FORMATO HTML DE LA RESPUESTA
+============================================================
+
+Usa HTML semántico SOLO cuando el contenido lo justifica. Reglas estrictas:
+
+DATO ÚNICO (una métrica, un valor):
+  -> Responde en texto plano. Sin etiquetas HTML. Mínimo 2-3 frases con contexto.
+
+LISTA DE ITEMS (3 o más items sin relación numérica directa):
+  -> Usa <ul><li>item</li></ul>
+  -> Añade un párrafo de texto ANTES de la lista a modo de introducción.
+  -> Los números clave dentro del texto de cada <li> puedes envolverlos en <strong>.
+
+COMPARATIVA CON VALORES NUMÉRICOS (2+ filas con etiqueta + número):
+  -> Usa una tabla: <table><thead><tr><th>Etiqueta</th><th>Valor</th></tr></thead><tbody>...</tbody></table>
+  -> Siempre incluye un párrafo de análisis DESPUÉS de la tabla.
+  -> Los valores más destacados dentro de <td> puedes envolverlos en <strong>.
+
+RESPUESTA MIXTA (texto + tabla o texto + lista):
+  -> El texto y la estructura HTML se mezclan naturalmente. Escribe el análisis y luego muestra los datos estructurados (o al revés si tiene más sentido).
+
+Tags PERMITIDOS: ul, ol, li, table, thead, tbody, tr, th, td, strong, em, br, p
+Tags PROHIBIDOS: div, span, script, style, a, img, input, form, cualquier atributo on*, href, src, style.
+
+============================================================
  ESTRUCTURA DINÁMICA DE LA RESPUESTA
 ============================================================
 
-DATO ÚNICO (una métrica, un valor):
-  -> NUNCA respondas SOLO con "El valor X es Y.". Siempre añade algo de contexto, interpretación
-    o una pregunta de seguimiento relevante. Al menos 2-3 frases.
-  Ejemplo: "En 2024, el mercado total de automoción en España registró 1.430.130 matriculaciones
-  según datos DGT. Es una cifra sólida que refleja la recuperación del sector tras los años de escasez
-  de semiconductores. ¿Quieres ver cómo se distribuye por regiones o compararlo con años anteriores?"
-
 MÚLTIPLES MÉTRICAS (varias medidas del mismo período):
-  -> Presenta cada dato, luego un párrafo de síntesis que relacione los números.
-  -> Busca la "historia" detrás de los números: relaciones entre métricas, qué implican juntas.
-  Ejemplo: "En 2024, Nissan matriculó 34.690 vehículos sobre un mercado total de 1.430.130 unidades,
-  lo que se traduce en una cuota del 2,42%. En términos prácticos, de cada 100 coches vendidos en
-  España, algo más de 2 llevan el logo de Nissan."
+  -> Presenta cada dato en tabla, luego un párrafo de síntesis.
 
 MÚLTIPLES FILAS (varias provincias, segmentos, etc.):
-  -> NO hagas una lista mecánica. Construye un relato: quién lidera, quién sorprende, qué patrón hay.
-  -> Si hay más de 8 filas, destaca los 3-4 más relevantes y menciona el total.
-  Ejemplo: "Madrid y Barcelona acaparan casi la mitad del volumen nacional. Valencia y Sevilla les siguen
-  a distancia. Lo que llama la atención es Zaragoza, que con su base industrial mantiene cifras
-  superiores a lo esperado por su tamaño poblacional."
+  -> Tabla con los datos, más análisis de quién lidera y qué patrón hay.
+  -> Si hay totales calculados (TOTALES CALCULADOS en el contexto), menciónalos.
 
 COMPARACIÓN TEMPORAL:
   -> Si hay datos de dos períodos, calcula la variación y coméntala con perspectiva de negocio.
-  -> ¿Es un buen resultado? ¿Qué lo explica (si lo sabes)?
-  Ejemplo: "Pasó de 46.663 en 2024 a 57.958 en 2025, un crecimiento del 24% aproximadamente.
-  Para Nissan, ese ritmo de crecimiento supera la media del mercado, lo que significa que ganó
-  cuota durante el año."
 
 ============================================================
  EXPANSIÓN DE TÉRMINOS
@@ -123,45 +144,159 @@ COMPARACIÓN TEMPORAL:
  FILTROS NO APLICADOS
 ============================================================
   - Solo si hay [WARN] FILTROS NO APLICADOS, menciónalo con honestidad.
-  - Propón alternativa si tiene sentido: "No pude filtrar por ese término exacto —
-    ¿quizás te refieres a [alternativa]?"
+  - Propón alternativa si tiene sentido.
 
 ============================================================
  LO QUE NUNCA DEBES HACER
 ============================================================
 × Mencionar "cubo", "SSAS", "MDX", "jerarquía", "base de datos", "catálogo".
 × Inventar datos o cifras que no estén en los resultados recibidos.
-× Hacer cálculos complejos que no estén ya calculados (puedes hacer sumas simples o estimar porcentajes obvios).
+× Hacer cálculos complejos que no estén ya calculados (puedes referenciar los TOTALES CALCULADOS que te pasen).
 × Usar frases vacías como "¡Claro que sí!", "¡Por supuesto!", "¡Excelente pregunta!".
 × Repetir la pregunta del usuario al inicio de tu respuesta.
 × Dar una sola frase cuando hay contexto valioso que añadir. El mínimo útil son 2-3 frases.
 × Ser excesivamente largo cuando la respuesta es sencilla (máximo 4-5 frases para preguntas directas).
-× NUNCA uses etiquetas HTML (<p>, <ul>, <li>, <b>, <br>, <div>, etc.). Solo texto plano.
-× No uses markdown con ** o ## para resaltar texto. Solo texto plano con puntuación normal.
+× Usar etiquetas HTML que no estén en la lista de permitidos.
+× No uses markdown con ** o ## para resaltar texto. Usa <strong> cuando el HTML sea apropiado.
 `.trim();
+
+// -- HTML allowlist sanitizer --------------------------------------------------
+
+const ALLOWED_HTML_TAGS = new Set([
+  "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
+  "strong", "em", "b", "i", "br", "p"
+]);
+
+const DANGEROUS_ATTRS = /\s+(on\w+|href|src|style|class|id|data-[^=\s]*)\s*=\s*["'][^"']*["']/gi;
+
+/**
+ * Sanitiza HTML eliminando tags no permitidos y atributos peligrosos.
+ * No usa un parser DOM completo para evitar dependencias externas.
+ * La validación final la hace el frontend (DOMPurify recomendado).
+ */
+function sanitizeHtml(html: string): string {
+  return html
+    // Eliminar atributos peligrosos en todos los tags
+    .replace(DANGEROUS_ATTRS, "")
+    // Eliminar tags no en la allowlist (apertura y cierre)
+    .replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g, (match, tagName: string) => {
+      if (ALLOWED_HTML_TAGS.has(tagName.toLowerCase())) {
+        // Reescribir el tag sin atributos para garantizar limpieza
+        const isClosing = match.startsWith("</");
+        const isSelfClosing = match.endsWith("/>") || tagName.toLowerCase() === "br";
+        if (isClosing) return `</${tagName.toLowerCase()}>`;
+        if (isSelfClosing) return `<${tagName.toLowerCase()} />`;
+        return `<${tagName.toLowerCase()}>`;
+      }
+      // Tag no permitido: eliminarlo
+      return "";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Detecta si una cadena contiene HTML semántico relevante (no solo texto plano).
+ */
+function containsHtml(text: string): boolean {
+  return /<(ul|ol|table|strong|em|br|p)\b/i.test(text);
+}
+
+/**
+ * Convierte HTML a texto plano legible.
+ * Las tablas se convierten a un formato de columnas alineadas con separadores.
+ * Las listas se convierten a viñetas con guión.
+ */
+function htmlToPlainText(html: string): string {
+  // -- 1. Convertir tablas a texto tabulado ------------------------------------
+  // Estrategia: extraer todas las filas y sus celdas, luego formatear con padding.
+  let result = html;
+
+  result = result.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (_match, inner: string) => {
+    // Extraer todas las filas
+    const rowMatches = inner.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) ?? [];
+    const tableRows: string[][] = rowMatches.map((rowHtml) => {
+      // Extraer todas las celdas (th o td)
+      const cellMatches = rowHtml.match(/<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi) ?? [];
+      return cellMatches.map((cellHtml) => {
+        // Limpiar tags dentro de la celda
+        return cellHtml
+          .replace(/<[^>]+>/g, "")
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+          .trim();
+      });
+    });
+
+    if (tableRows.length === 0) return "";
+
+    // Calcular ancho máximo por columna
+    const colCount = Math.max(...tableRows.map((r) => r.length));
+    const colWidths: number[] = Array.from({ length: colCount }, (_, ci) =>
+      Math.max(...tableRows.map((r) => (r[ci] ?? "").length), 4)
+    );
+
+    // Formatear filas
+    const lines: string[] = [];
+    tableRows.forEach((row, ri) => {
+      const line = row
+        .map((cell, ci) => cell.padEnd(colWidths[ci] ?? cell.length))
+        .join("  |  ");
+      lines.push(line);
+      // Separador después del header (primera fila)
+      if (ri === 0) {
+        const sep = colWidths.map((w) => "-".repeat(w)).join("--+--");
+        lines.push(sep);
+      }
+    });
+    return "\n" + lines.join("\n") + "\n";
+  });
+
+  // -- 2. Convertir listas a viñetas ------------------------------------------
+  result = result
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (_m, inner: string) => {
+      const text = inner.replace(/<[^>]+>/g, "").trim();
+      return `\n- ${text}`;
+    })
+    .replace(/<\/ul>|<\/ol>/gi, "\n")
+    .replace(/<ul[^>]*>|<ol[^>]*>/gi, "");
+
+  // -- 3. Párrafos y saltos de línea ------------------------------------------
+  result = result
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<p[^>]*>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, "$1")
+    .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, "$1")
+    .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, "$1")
+    .replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, "$1")
+    .replace(/<[^>]+>/g, "")  // eliminar cualquier tag restante
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+
+  return result;
+}
 
 // -- Agent function -------------------------------------------------------------
 
-/** Extrae el tiempo de espera en ms desde un error 429 (retry-after o backoff fijo) */
+/** Extrae el tiempo de espera en ms desde un error 429 */
 function extract429WaitMs(err: unknown, attempt: number): number {
   const msg = String((err as Error)?.message ?? "");
-  // Intenta leer "retry-after: N" en el mensaje de error
   const retryMatch = msg.match(/retry[_-]after[:\s]+(\d+)/i);
   if (retryMatch) return Number(retryMatch[1]) * 1000 + 500;
-  // Backoff exponencial: 8s, 20s, 45s
   return [8000, 20000, 45000][Math.min(attempt - 1, 2)];
 }
 
-export async function generate(ctx: ResponseContext): Promise<string> {
+export async function generate(ctx: ResponseContext): Promise<GenerateResult> {
   if (ctx.results.length === 0) {
-    return buildEmptyResponse(ctx);
+    const text = buildEmptyResponse(ctx);
+    return { answer: text, answer_html: null };
   }
 
   const userMessage = buildUserMessage(ctx);
 
   console.log(`[Agent3:Redactor] agente=${env.azureWorkerAgentId} resultados=${ctx.results.length}`);
 
-  // Hasta 3 intentos con backoff exponencial para errores 429
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -169,7 +304,11 @@ export async function generate(ctx: ResponseContext): Promise<string> {
       const response = await callAgent(env.azureWorkerAgentId, RESPONSE_INSTRUCTIONS, msg);
       if (response && response.trim().length > 30) {
         console.log(`[Agent3:Redactor] OK en intento ${attempt}`);
-        return sanitizeResponse(response.trim());
+        const raw = response.trim();
+        const hasHtml = containsHtml(raw);
+        const answer_html = hasHtml ? sanitizeHtml(raw) : null;
+        const answer = hasHtml ? htmlToPlainText(raw) : raw;
+        return { answer, answer_html };
       }
       console.warn(`[Agent3:Redactor] intento ${attempt}: respuesta vacía o muy corta`);
     } catch (err) {
@@ -185,24 +324,8 @@ export async function generate(ctx: ResponseContext): Promise<string> {
     }
   }
 
-  // Fallback conversacional — nunca bullet points
   console.warn("[Agent3:Redactor] usando fallback conversacional tras agotar reintentos");
   return buildFallbackResponse(ctx);
-}
-
-/** Elimina HTML y markdown que el LLM a veces genera aunque no se lo pidamos */
-function sanitizeResponse(text: string): string {
-  return text
-    .replace(/<[^>]+>/g, "")           // eliminar etiquetas HTML
-    .replace(/\*\*(.*?)\*\*/g, "$1")   // eliminar **negrita**
-    .replace(/__(.*?)__/g, "$1")       // eliminar __negrita__
-    .replace(/#{1,6}\s/g, "")          // eliminar ## headers
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\n{3,}/g, "\n\n")        // máximo 2 saltos de línea seguidos
-    .trim();
 }
 
 // -- Builders --------------------------------------------------------------------
@@ -224,8 +347,6 @@ function smartFormatValue(value: string | number, measureName: string): string {
   if (isNaN(num)) return String(value);
 
   if (isPercentageMeasure(measureName)) {
-    // Los valores de cuota en SSAS suelen venir como fracción decimal (ej: 0.0237 = 2.37%)
-    // Si el valor está entre 0 y 1, lo convertimos a porcentaje
     const pct = num < 1 && num > -1 ? num * 100 : num;
     return `${pct.toFixed(2).replace(".", ",")}%`;
   }
@@ -238,7 +359,6 @@ function buildUserMessage(ctx: ResponseContext): string {
 
   lines.push(`Pregunta del usuario: "${ctx.originalQuestion}"`);
 
-  // Hint de tipos de medida para el agente
   const percentageMeasures = ctx.results
     .map((r) => r.measure_name)
     .filter(isPercentageMeasure);
@@ -246,7 +366,6 @@ function buildUserMessage(ctx: ResponseContext): string {
     lines.push(`NOTA: Las siguientes medidas son porcentajes (formatea como XX,XX%): ${[...new Set(percentageMeasures)].join(", ")}`);
   }
 
-  // Applied filters summary
   if (ctx.appliedFilters.length > 0) {
     const filterDesc = ctx.appliedFilters
       .map((f) => `${f.friendly_name}: ${f.values.join(", ")}`)
@@ -254,7 +373,17 @@ function buildUserMessage(ctx: ResponseContext): string {
     lines.push(`Filtros aplicados: ${filterDesc}`);
   }
 
-  // Results table — usar smartFormatValue para valores de porcentaje
+  // Totales calculados en Node.js (exactos)
+  if (ctx.computed && ctx.computed.count > 1) {
+    const c = ctx.computed;
+    const parts: string[] = [`count=${c.count}`];
+    if (c.sum != null) parts.push(`suma=${c.sum.toLocaleString("es-ES")}`);
+    if (c.avg != null) parts.push(`promedio=${c.avg.toLocaleString("es-ES")}`);
+    if (c.max != null) parts.push(`máximo=${c.max.toLocaleString("es-ES")}`);
+    if (c.min != null) parts.push(`mínimo=${c.min.toLocaleString("es-ES")}`);
+    lines.push(`TOTALES CALCULADOS (${c.label}): ${parts.join(", ")}`);
+  }
+
   lines.push("");
   if (ctx.results.length <= 30) {
     lines.push("Datos obtenidos:");
@@ -274,17 +403,15 @@ function buildUserMessage(ctx: ResponseContext): string {
     lines.push(`  ... y ${ctx.results.length - 20} registros más.`);
   }
 
-  // Filter expansions — tell the agent what generic terms were expanded
   if (ctx.filterExpansions && ctx.filterExpansions.length > 0) {
     lines.push("");
     lines.push("EXPANSIONES REALIZADAS (términos genéricos resueltos a categorías reales):");
     for (const e of ctx.filterExpansions) {
       lines.push(`  - "${e.original}" (${e.friendly_name}) -> ${e.expanded.join(", ")}`);
     }
-    lines.push("  ↑ Estos filtros SÍ fueron aplicados. Los datos de arriba son correctos.");
+    lines.push("  Estos filtros SI fueron aplicados. Los datos de arriba son correctos.");
   }
 
-  // Unresolved filters — make explicit
   if (ctx.unresolvedFilters.length > 0) {
     lines.push("");
     lines.push("[WARN] FILTROS NO APLICADOS (informa al usuario de estos — no tienen datos):");
@@ -296,8 +423,8 @@ function buildUserMessage(ctx: ResponseContext): string {
   lines.push("");
   lines.push(
     "Escribe una respuesta EN ESPAÑOL, conversacional y analítica. " +
-    "OBLIGATORIO: incluye al menos el dato principal + una interpretación/contexto + " +
-    "(si es genuinamente útil) una sugerencia de seguimiento. " +
+    "Usa HTML semántico (tabla o lista) cuando haya 2+ datos comparables. " +
+    "OBLIGATORIO: incluye al menos el dato principal + una interpretación/contexto. " +
     "NUNCA respondas con una sola frase. Mínimo 2-3 frases bien conectadas. " +
     "Actúa como un analista de negocio experto que habla con su director, no como un buscador."
   );
@@ -322,62 +449,54 @@ function buildEmptyResponse(ctx: ResponseContext): string {
   ].filter(Boolean).join(" ");
 }
 
-/** Fallback conversacional — nunca usa bullet points, construye frases naturales */
-function buildFallbackResponse(ctx: ResponseContext): string {
-  if (!ctx.results.length) return buildEmptyResponse(ctx);
+/** Fallback: construye HTML simple cuando el LLM no respondió */
+function buildFallbackResponse(ctx: ResponseContext): GenerateResult {
+  if (!ctx.results.length) {
+    const text = buildEmptyResponse(ctx);
+    return { answer: text, answer_html: null };
+  }
 
   const filterDesc = ctx.appliedFilters
     .map((f) => `${f.friendly_name}: ${f.values.join(", ")}`)
     .join("; ");
 
-  const parts: string[] = [];
-
   if (ctx.results.length === 1) {
     const r = ctx.results[0];
     const val = smartFormatValue(r.value, r.measure_name);
-    const dimParts = Object.entries(r.dimensions ?? {})
-      .map(([, v]) => v)
-      .join(", ");
-    parts.push(
+    const dimParts = Object.entries(r.dimensions ?? {}).map(([, v]) => v).join(", ");
+    const text =
       `El valor de ${r.measure_name} es ${val}` +
       (dimParts ? ` para ${dimParts}` : "") +
-      (filterDesc ? ` (filtros: ${filterDesc})` : "") +
-      "."
-    );
-  } else if (ctx.results.length <= 6) {
-    const intro = filterDesc
-      ? `Con los filtros aplicados (${filterDesc}), los datos son:`
-      : "Los datos obtenidos son:";
-    parts.push(intro);
-    for (const r of ctx.results) {
-      const val = smartFormatValue(r.value, r.measure_name);
-      const dimParts = Object.entries(r.dimensions ?? {}).map(([, v]) => v).join(", ");
-      parts.push(`${r.measure_name}: ${val}${dimParts ? ` (${dimParts})` : ""}.`);
-    }
-  } else {
-    const intro = filterDesc
-      ? `Con los filtros aplicados (${filterDesc}), se encontraron ${ctx.results.length} registros. Los más relevantes:`
-      : `Se encontraron ${ctx.results.length} registros. Los más relevantes:`;
-    parts.push(intro);
-    for (const r of ctx.results.slice(0, 5)) {
-      const val = smartFormatValue(r.value, r.measure_name);
-      const dimParts = Object.entries(r.dimensions ?? {}).map(([, v]) => v).join(", ");
-      parts.push(`${r.measure_name}: ${val}${dimParts ? ` (${dimParts})` : ""}.`);
-    }
-    if (ctx.results.length > 5) {
-      parts.push(`Hay ${ctx.results.length - 5} registros adicionales.`);
-    }
+      (filterDesc ? ` (filtros: ${filterDesc})` : "") + ".";
+    return { answer: text, answer_html: null };
   }
+
+  // Múltiples resultados: construir tabla HTML
+  const rows = ctx.results.map((r) => {
+    const val = smartFormatValue(r.value, r.measure_name);
+    const dimLabel = Object.values(r.dimensions ?? {}).join(", ") || r.measure_name;
+    return `<tr><td>${dimLabel}</td><td><strong>${val}</strong></td></tr>`;
+  }).join("");
+
+  const computedNote = ctx.computed?.sum != null
+    ? `<p><strong>Total: ${ctx.computed.sum.toLocaleString("es-ES")}</strong>${filterDesc ? ` (${filterDesc})` : ""}</p>`
+    : "";
+
+  const answer_html = `<table><thead><tr><th>Concepto</th><th>Valor</th></tr></thead><tbody>${rows}</tbody></table>${computedNote}`;
+  const answer = htmlToPlainText(answer_html) + (ctx.computed?.sum != null ? ` Total: ${ctx.computed.sum.toLocaleString("es-ES")}.` : "");
 
   if (ctx.unresolvedFilters.length > 0) {
     const unresolved = ctx.unresolvedFilters.flatMap((f) => f.values).join(", ");
-    parts.push(`Nota: no se encontraron datos para: ${unresolved}.`);
+    return {
+      answer: answer + ` Nota: no se encontraron datos para: ${unresolved}.`,
+      answer_html: answer_html + `<p>Nota: no se encontraron datos para: ${unresolved}.</p>`
+    };
   }
 
-  return parts.join(" ");
+  return { answer, answer_html };
 }
 
-/** Mensaje compacto para el segundo intento (en caso de que el primero falle por tokens) */
+/** Mensaje compacto para el segundo intento */
 function buildCompactMessage(ctx: ResponseContext): string {
   const r = ctx.results.slice(0, 5);
   const data = r.map((row) => {
@@ -386,5 +505,6 @@ function buildCompactMessage(ctx: ResponseContext): string {
     return `${row.measure_name}: ${val}${dims ? ` (${dims})` : ""}`;
   }).join(". ");
   const filters = ctx.appliedFilters.map((f) => `${f.friendly_name}=${f.values.join(",")}`).join("; ");
-  return `Pregunta: "${ctx.originalQuestion}". Datos: ${data}. ${filters ? "Filtros: " + filters + "." : ""} Responde de forma conversacional y natural en español.`;
+  const computed = ctx.computed?.sum != null ? ` Suma total: ${ctx.computed.sum.toLocaleString("es-ES")}.` : "";
+  return `Pregunta: "${ctx.originalQuestion}". Datos: ${data}.${computed} ${filters ? "Filtros: " + filters + "." : ""} Responde en español con HTML semántico (tabla si hay varios datos).`;
 }

@@ -256,11 +256,21 @@ function buildIntentBlock(intent: QueryIntent): string {
     lines.push("Filtros de dimensión solicitados: NINGUNO — NO añadas filtros de provincia, segmento, marca ni ninguna otra dimensión.");
   }
 
-  if (intent.timeFilters.year)  {
-    lines.push(`Año:  ${intent.timeFilters.year}  <- AÑADIR filtro de año obligatoriamente`);
+  // Años: puede ser uno solo (year) o varios (years[])
+  const yearsArray = intent.timeFilters.years && intent.timeFilters.years.length > 0
+    ? intent.timeFilters.years
+    : intent.timeFilters.year
+      ? [intent.timeFilters.year]
+      : [];
+
+  if (yearsArray.length > 1) {
+    lines.push(`Años: ${yearsArray.join(", ")}  <- AÑADIR un filtro de año con TODOS estos valores: [${yearsArray.join(",")}]`);
+  } else if (yearsArray.length === 1) {
+    lines.push(`Año:  ${yearsArray[0]}  <- AÑADIR filtro de año obligatoriamente`);
   } else {
     lines.push("Año: NO ESPECIFICADO — NO añadas filtro de año.");
   }
+
   if (intent.timeFilters.month) {
     lines.push(`Mes:  ${intent.timeFilters.month}  <- AÑADIR filtro de mes obligatoriamente`);
   } else {
@@ -268,6 +278,7 @@ function buildIntentBlock(intent: QueryIntent): string {
   }
   if (intent.preferredCube)     lines.push(`Cubo preferido: "${intent.preferredCube}"`);
   if (intent.isFollowUp)        lines.push("[WARN] SEGUIMIENTO: mantener el mismo cubo de la conversación.");
+  if (intent.isBreakdown)       lines.push(`[DESGLOSE] El usuario quiere un listado por dimensión: "${intent.breakdownDimension}" — NO añadas esta dimensión como filtro WHERE, se usará en ROWS.`);
 
   lines.push("============================================");
   return lines.join("\n");

@@ -57,9 +57,21 @@ type MeasureResult = {
   filter_label: string;
 };
 
+export type ChartData = {
+  type: "bar" | "line" | "pie";
+  labels: string[];
+  datasets: Array<{
+    label: string;
+    data: number[];
+  }>;
+};
+
 export type AskResponsePayload = {
   question: string;
   answer: string;
+  answer_html: string | null;
+  chart_data: ChartData | null;
+  computed: responseAgent.ComputedAggregations | null;
   data: {
     value: string | null;
     cube: string | null;
@@ -905,6 +917,275 @@ async function executeMeasureQuery(
   return results;
 }
 
+// -- Multi-year filter helper ------------------------------------------------
+
+/**
+ * Cuando el intérprete extrae múltiples años (intent.timeFilters.years),
+ * los normaliza a un único MappedFilter de tipo "year" con varios values.
+ * Así el pipeline genera una query separada por año.
+ */
+function injectMultiYearFilter(
+  selection: LlmSelection,
+  intent: import("../agents/types").QueryIntent
+): void {
+  const years = intent.timeFilters?.years;
+  if (!years || years.length === 0) return;
+
+  // Detectar si ya hay un filtro de año en la selección
+  const existingYear = selection.filters.find((f) => f.type === "year");
+  if (existingYear) {
+    // Completar con los años que falten
+    for (const y of years) {
+      if (!existingYear.values.includes(y)) existingYear.values.push(y);
+    }
+    return;
+  }
+
+  // No hay filtro de año: inyectar uno genérico
+  // El hierarchy_mdx se inferirá en resolveFilters via type="year"
+  selection.filters.push({
+    type: "year",
+    hierarchy_mdx: "[Fecha].[Año]",
+    friendly_name: "Año",
+    values: years
+  });
+}
+
+// -- Computed aggregations & chart data builders -----------------------------
+
+/**
+ * Computes numeric aggregations over MeasureResult values.
+ * Only considers results that have a valid numeric value.
+ */
+function computeAggregations(results: MeasureResult[]): responseAgent.ComputedAggregations | null {
+  const numeric = results
+    .map((r) => (r.value !== null ? parseFloat(r.value) : NaN))
+    .filter((n) => !isNaN(n));
+
+  if (numeric.length === 0) return null;
+
+  const label = results[0]?.friendly_name ?? "Valor";
+  const sum = numeric.reduce((a, b) => a + b, 0);
+  const avg = sum / numeric.length;
+  const max = Math.max(...numeric);
+  const min = Math.min(...numeric);
+
+  return { sum, avg, max, min, count: numeric.length, label };
+}
+
+/**
+ * Builds chart-ready data from MeasureResult array.
+ * Returns null when there are not enough data points to render a chart (< 2 rows)
+ * or when the results are a single scalar value.
+ */
+function buildChartData(results: MeasureResult[]): ChartData | null {
+  if (results.length < 2) return null;
+
+  // Detect if results have dimension breakdown (different dimension values)
+  const hasDimensions = results.some((r) => Object.keys(r.filter_combo).length > 0 || r.filter_label !== "sin filtros");
+
+  if (!hasDimensions) return null;
+
+  // Group by measure name
+  const byMeasure = new Map<string, MeasureResult[]>();
+  for (const r of results) {
+    const key = r.friendly_name;
+    if (!byMeasure.has(key)) byMeasure.set(key, []);
+    byMeasure.get(key)!.push(r);
+  }
+
+  // Build labels from filter combos — use the dimension values as axis labels
+  const firstGroup = [...byMeasure.values()][0] ?? [];
+  const labels = firstGroup.map((r) => {
+    const dimValues = r.filter_combo.map((t) => t.value_caption).join(", ");
+    return dimValues || r.filter_label;
+  });
+
+  if (labels.length < 2) return null;
+
+  const datasets = [...byMeasure.entries()].map(([measureName, rows]) => ({
+    label: measureName,
+    data: rows.map((r) => (r.value !== null ? parseFloat(r.value) : 0))
+  }));
+
+  // Choose chart type heuristically
+  const isTimeSeries = labels.some((l) => /\b(20\d{2}|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/i.test(l));
+  const chartType: ChartData["type"] = isTimeSeries ? "line" : labels.length <= 8 ? "bar" : "bar";
+
+  return { type: chartType, labels, datasets };
+}
+
+// -- Breakdown MDX execution -------------------------------------------------
+
+/**
+ * Mapeo semántico: concepto del usuario -> jerarquía MDX candidata.
+ * Solo se usa para DESCUBRIR la jerarquía si el mapper no la especifica.
+ */
+const BREAKDOWN_DIMENSION_HINTS: Record<string, string[]> = {
+  año:        ["[Fecha].[Año]",       "[Date].[Year]",        "[Periodo].[Año]"],
+  mes:        ["[Fecha].[Mes]",       "[Date].[Month]",       "[Fecha].[Año - Mes]"],
+  provincia:  ["[-MT Territorios].[Provincia]", "[Territorio].[Provincia]", "[Provincia].[Provincia]"],
+  region:     ["[-MT Territorios].[Comunidad Autónoma]", "[Territorio].[Región]", "[Comunidad Autónoma].[Comunidad Autónoma]"],
+  segmento:   ["[Producto].[Segmento]", "[Clasificación RGV].[Segmento]", "[Segmento].[Segmento]"],
+  marca:      ["[Producto].[Marca]",  "[Marca].[Marca]",      "[-MT Producto].[Marca]"],
+  canal:      ["[Canales].[Canal]",   "[Canal].[Canal]"],
+};
+
+/**
+ * Extrae el valor de un miembro de dimensión de una fila de respuesta MDX tabular.
+ * Las columnas de dimensión tienen nombres como "[Fecha].[Año].[Año]" o "Fecha_x002E_Año".
+ */
+function extractDimensionLabel(row: Record<string, unknown>): string | null {
+  const keys = Object.keys(row);
+  // Las columnas de medida tienen formato [Measures]... — las saltamos
+  const dimKey = keys.find((k) => {
+    const lower = k.toLowerCase();
+    return !lower.includes("measures") && !lower.includes("_x005b_measures");
+  });
+  if (!dimKey) return null;
+  const val = row[dimKey];
+  if (typeof val === "string" || typeof val === "number") return String(val);
+  if (val && typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    return obj._ ? String(obj._) : null;
+  }
+  return null;
+}
+
+/**
+ * Ejecuta una consulta MDX de desglose (con dimensión en ROWS).
+ * Formato: SELECT {[Measure]} ON COLUMNS, {[Hierarchy].Members} ON ROWS FROM [Cube]
+ * Parsea todas las filas y devuelve un MeasureResult por fila.
+ */
+async function executeBreakdownQuery(
+  cube: ManifestCube,
+  measure: LlmSelection["measures"][number],
+  breakdownHierarchy: string,
+  extraFilters: FilterTuple[],
+  traceId: string
+): Promise<MeasureResult[]> {
+  const whereClause = extraFilters.length > 0
+    ? ` WHERE ( ${extraFilters.map((t) => t.member_unique_name).join(", ")} )`
+    : "";
+
+  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS, { ${breakdownHierarchy}.Members } ON ROWS FROM [${cube.xmlaCubeName}]${whereClause}`;
+
+  pLog("  [BREAKDOWN]", BLUE, "MDX desglose", mdx.replace(/\s+/g, " ").slice(0, 200));
+
+  await debugLogger.log("ask", "breakdown_mdx_attempt", { traceId, measure: measure.friendly_name, mdx });
+
+  try {
+    const result = await mdxBridgeService.executeMdx(mdx, cube.catalog);
+    const rows = (result.rows as unknown[]) ?? [];
+
+    if (rows.length === 0) {
+      pLog("  [!]", YELLOW, "Desglose: 0 filas");
+      return [];
+    }
+
+    pLog("  [OK]", GREEN, `Desglose: ${rows.length} filas`);
+
+    const dimFriendly = breakdownHierarchy.split(".").pop()?.replace(/[\[\]]/g, "") ?? "Dimensión";
+
+    const results: MeasureResult[] = rows
+      .map((rawRow) => {
+        const row = rawRow as Record<string, unknown>;
+        const dimLabel = extractDimensionLabel(row) ?? "?";
+        const keys = Object.keys(row);
+        const measureKey = keys.find((k) => k.toLowerCase().includes("measures") || k.toLowerCase().includes("_x005b_measures")) ?? keys[keys.length - 1];
+        const rawVal = row[measureKey ?? ""];
+        let value: string | null = null;
+        if (typeof rawVal === "string" || typeof rawVal === "number") {
+          value = parseSsasNumber(String(rawVal));
+        } else if (rawVal && typeof rawVal === "object") {
+          const obj = rawVal as Record<string, unknown>;
+          value = parseSsasNumber(obj._ ? String(obj._) : null);
+        }
+
+        return {
+          technical_name: measure.technical_name,
+          friendly_name: measure.friendly_name,
+          cube_name: cube.cubeName,
+          mdx,
+          value,
+          catalog: cube.catalog,
+          filter_combo: [
+            ...extraFilters,
+            {
+              dimension_friendly: dimFriendly,
+              dimension_mdx: breakdownHierarchy,
+              value_caption: dimLabel,
+              member_unique_name: `${breakdownHierarchy}.&[${dimLabel}]`
+            }
+          ],
+          filter_label: dimLabel
+        };
+      })
+      // Filtrar filas "All" (miembros raíz/agregados que no son valores reales)
+      .filter((r) => {
+        const label = r.filter_label.toLowerCase();
+        return label !== "" && label !== "?" && !label.startsWith("all") && !label.includes("total general");
+      });
+
+    await debugLogger.log("ask", "breakdown_mdx_success", {
+      traceId,
+      measure: measure.friendly_name,
+      rows: results.length
+    });
+
+    return results;
+  } catch (err) {
+    pLog("  [X]", RED, `Desglose MDX ERROR`, (err as Error).message.slice(0, 120));
+    await debugLogger.log("ask", "breakdown_mdx_error", {
+      traceId, measure: measure.friendly_name, error: (err as Error).message
+    });
+    return [];
+  }
+}
+
+/**
+ * Resuelve el hierarchy MDX a usar para el desglose.
+ * Intenta las jerarquías candidatas hasta encontrar una válida en el cubo.
+ */
+function resolveBreakdownHierarchy(
+  breakdownDimension: string,
+  cube: ManifestCube
+): string | null {
+  const dimLower = breakdownDimension.toLowerCase();
+
+  // Buscar en los hints semánticos
+  for (const [key, candidates] of Object.entries(BREAKDOWN_DIMENSION_HINTS)) {
+    if (dimLower.includes(key) || key.includes(dimLower)) {
+      // Verificar cuál existe en el cubo (por nombre parcial)
+      for (const candidate of candidates) {
+        const candidateNorm = normalize(candidate);
+        const found = cube.members.find(
+          (m) =>
+            m.type === "dimension" &&
+            (normalize(m.mdxUniqueName).includes(candidateNorm) ||
+              candidateNorm.includes(normalize(m.mdxUniqueName)))
+        );
+        if (found) return candidate;
+        // Si el cubo tiene la jerarquía con ese nombre base, usarla directamente
+        const partial = cube.members.find(
+          (m) =>
+            m.type === "dimension" &&
+            normalize(m.mdxUniqueName).includes(normalize(candidate.split(".")[0] ?? ""))
+        );
+        if (partial) return candidate;
+      }
+      // Si no se encontró en el cubo, usar el primer candidato de todos modos
+      return candidates[0] ?? null;
+    }
+  }
+
+  // Fallback: buscar en los miembros del cubo por texto
+  const dimMember = cube.members.find(
+    (m) => m.type === "dimension" && normalize(m.friendlyName).includes(dimLower)
+  );
+  return dimMember?.mdxUniqueName ?? null;
+}
+
 // -- Response Generation (delegated to responseAgent) ------------------------
 
 async function generateNaturalResponse(
@@ -913,8 +1194,9 @@ async function generateNaturalResponse(
   selection: LlmSelection,
   unresolvedFilters: Array<{ hierarchy_mdx: string; friendly_name: string; values: string[] }>,
   filterExpansions: FilterExpansion[] = [],
-  traceId = "unknown"
-): Promise<string> {
+  traceId = "unknown",
+  computed: responseAgent.ComputedAggregations | null = null
+): Promise<{ answer: string; answer_html: string | null }> {
   const ssasResults: responseAgent.SsasResult[] = results.map((r) => ({
     measure_name: r.friendly_name,
     value: r.value ?? "sin datos",
@@ -936,7 +1218,7 @@ async function generateNaturalResponse(
       return acc;
     }, []);
 
-  const responseCtx = {
+  const responseCtx: responseAgent.ResponseContext = {
     originalQuestion: question,
     cubeName: selection.cube_name,
     results: ssasResults,
@@ -949,7 +1231,8 @@ async function generateNaturalResponse(
       original: e.original,
       expanded: e.expanded,
       friendly_name: e.friendly_name
-    }))
+    })),
+    computed
   };
 
   await debugLogger.log("ask", "worker_agent_call", {
@@ -957,18 +1240,20 @@ async function generateNaturalResponse(
     cube: selection.cube_name,
     results_count: ssasResults.length,
     applied_filters: appliedFilters.map((f) => `${f.friendly_name}=${f.values.join(",")}`),
-    unresolved_count: unresolvedFilters.length
+    unresolved_count: unresolvedFilters.length,
+    computed_sum: computed?.sum ?? null
   });
 
-  const answer = await responseAgent.generate(responseCtx);
+  const result = await responseAgent.generate(responseCtx);
 
   await debugLogger.log("ask", "worker_agent_response", {
     traceId,
-    answer_length: answer.length,
-    answer_preview: answer.slice(0, 120)
+    answer_length: result.answer.length,
+    has_html: result.answer_html !== null,
+    answer_preview: result.answer.slice(0, 120)
   });
 
-  return answer;
+  return { answer: result.answer, answer_html: result.answer_html };
 }
 
 // -- Main Pipeline ------------------------------------------------------------
@@ -1020,7 +1305,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: `Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector. Tengo acceso a los datos de los siguientes cubos: ${cubeNames0}. Puedes preguntarme, por ejemplo, "¿cuántas matriculaciones hubo en 2024?", "¿cuál es la cuota de mercado de Nissan?" o "¿qué vendió Madrid el año pasado?"`,
-      data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
   // -------------------------------------------------------------------------
@@ -1059,7 +1344,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: "No tienes acceso a ningún cubo de datos. Contacta con el administrador para solicitar permisos.",
-      data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1112,7 +1397,7 @@ export async function runAskPipeline(
       return {
         question: prompt,
         answer: `Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector. Tengo acceso a los datos de los siguientes cubos: ${cubeNames}. Puedes preguntarme cosas como "¿cuántas matriculaciones hubo en 2024?", "¿cuál es la cuota de mercado de Nissan?", o "¿qué vendió Madrid el año pasado?"`,
-        data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+        answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
       };
     }
 
@@ -1150,7 +1435,7 @@ export async function runAskPipeline(
         return {
           question: prompt,
           answer: description,
-          data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
+          answer_html: null, chart_data: null, computed: null, data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
         };
       }
     }
@@ -1160,7 +1445,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: `Tienes acceso a los siguientes cubos de datos: ${cubeList}. Puedes preguntarme sobre cualquiera de ellos.`,
-      data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1183,7 +1468,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: "Solo puedo responder preguntas sobre datos analíticos: matriculaciones, ventas, stock, cuotas de mercado y datos disponibles en los cubos OLAP. Por favor reformula tu pregunta dentro de ese dominio.",
-      data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1219,7 +1504,7 @@ export async function runAskPipeline(
       return {
         question: prompt,
         answer: `No tengo acceso al cubo de "${intent.preferredCube}" con tu suscripción actual. Los cubos disponibles para ti son: ${available}.`,
-        data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+        answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
       };
     }
   }
@@ -1275,7 +1560,7 @@ export async function runAskPipeline(
         return {
           question: prompt,
           answer: `No tengo acceso a datos específicos de "${entity.rawValue}" con tu suscripción. Los cubos disponibles para ti son: ${available}.`,
-          data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+          answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
         };
       }
     }
@@ -1472,6 +1757,9 @@ export async function runAskPipeline(
     }
   }
 
+  // -- INYECTAR multi-year: si el intérprete extrajo varios años, añadirlos al filtro ----
+  injectMultiYearFilter(selection, intent);
+
   // -- Step 7: Resolve filter members via XMLA DISCOVER (multi-value aware) --
   const { groups: resolvedFilterGroups, unresolved: unresolvedFilters, expansions: filterExpansions } =
     await resolveFilters(selectedCube, selection.filters, traceId);
@@ -1487,23 +1775,63 @@ export async function runAskPipeline(
     }
   }
 
-  // -- Step 8: Execute MDX — one query per filter combination ----------------
+  // -- Step 8: Execute MDX (scalar o desglose según intención) ---------------
+  const isBreakdown = Boolean(intent.isBreakdown) && Boolean(intent.breakdownDimension);
   const allResults: MeasureResult[] = [];
-  for (const measure of validatedMeasures) {
-    try {
-      const measureResults = await executeMeasureQuery(
-        selectedCube,
-        measure,
-        resolvedFilterGroups,
-        traceId
-      );
-      allResults.push(...measureResults);
-    } catch (err) {
-      await debugLogger.log("ask", "measure_execution_error", {
-        traceId,
-        measure: measure.friendly_name,
-        error: (err as Error).message
+
+  if (isBreakdown && intent.breakdownDimension) {
+    // -- DESGLOSE: MDX con dimensión en ROWS -----------------------------------
+    const breakdownHierarchy = resolveBreakdownHierarchy(intent.breakdownDimension, selectedCube);
+
+    if (!breakdownHierarchy) {
+      pLog("[WARN]", YELLOW, "Desglose: no se encontró jerarquía", `para "${intent.breakdownDimension}" — usando escalar`);
+    } else {
+      pLog("[BREAKDOWN]", CYAN, `Desglose por "${intent.breakdownDimension}"`, `jerarquía: ${breakdownHierarchy}`);
+      await debugLogger.log("ask", "breakdown_mode", {
+        traceId, dimension: intent.breakdownDimension, hierarchy: breakdownHierarchy
       });
+
+      // Filtros que van en WHERE (todos los que NO son la misma jerarquía del desglose)
+      const extraFilters: FilterTuple[] = resolvedFilterGroups
+        .filter((g) => !g.hierarchy_mdx.startsWith(breakdownHierarchy.split(".")[0] ?? "NOPE"))
+        .flatMap((g) => g.members.map((m) => ({
+          dimension_friendly: g.hierarchy_friendly,
+          dimension_mdx: g.hierarchy_mdx,
+          value_caption: m.value_caption,
+          member_unique_name: m.member_unique_name
+        })));
+
+      for (const measure of validatedMeasures) {
+        const rows = await executeBreakdownQuery(
+          selectedCube, measure, breakdownHierarchy, extraFilters, traceId
+        );
+        allResults.push(...rows);
+      }
+    }
+  }
+
+  if (!isBreakdown || allResults.length === 0) {
+    // -- ESCALAR: una query por combinación de filtros -------------------------
+    if (allResults.length > 0) {
+      // Modo desglose falló — ya tenemos resultados parciales, no mezclar
+    } else {
+      for (const measure of validatedMeasures) {
+        try {
+          const measureResults = await executeMeasureQuery(
+            selectedCube,
+            measure,
+            resolvedFilterGroups,
+            traceId
+          );
+          allResults.push(...measureResults);
+        } catch (err) {
+          await debugLogger.log("ask", "measure_execution_error", {
+            traceId,
+            measure: measure.friendly_name,
+            error: (err as Error).message
+          });
+        }
+      }
     }
   }
 
@@ -1513,13 +1841,26 @@ export async function runAskPipeline(
     );
   }
 
-  // -- Step 9: Agent 3 — Response: format final answer ------------------------
+  // -- Step 9: Compute aggregations + chart data (pure Node.js, no LLM) -------
+  const computed = computeAggregations(allResults);
+  const chart_data = buildChartData(allResults);
+
+  if (computed) {
+    pLog("[CALC]", CYAN, "Agregados calculados",
+      `count=${computed.count} sum=${computed.sum?.toLocaleString("es-ES") ?? "-"} avg=${computed.avg?.toFixed(2) ?? "-"}`);
+  }
+
+  // -- Step 10: Agent 3 — Response: format final answer ----------------------
   pLog("[WRITE] ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
-  const answer = await generateNaturalResponse(prompt, allResults, selection, unresolvedFilters, filterExpansions, traceId);
+  const { answer, answer_html } = await generateNaturalResponse(
+    prompt, allResults, selection, unresolvedFilters, filterExpansions, traceId, computed
+  );
   const primary = allResults[0];
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   pLog("[INFO]", GREEN, "RESPUESTA FINAL", `\n${answer}`);
+  if (answer_html) pLog("[HTML]", CYAN, "HTML generado", `${answer_html.length} chars`);
+  if (chart_data) pLog("[CHART]", CYAN, "Chart data", `type=${chart_data.type} labels=${chart_data.labels.length}`);
   pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${allResults.length} resultado(s)`);
   console.log(`${CYAN}${"-".repeat(70)}${RESET}\n`);
 
@@ -1528,12 +1869,18 @@ export async function runAskPipeline(
     cube: selectedCube.cubeName,
     elapsed_ms: Date.now() - t0,
     answer: answer.slice(0, 300),
+    has_html: answer_html !== null,
+    has_chart: chart_data !== null,
+    computed,
     results: allResults.map((r) => ({ measure: r.friendly_name, value: r.value, label: r.filter_label }))
   });
 
   return {
     question: prompt,
     answer,
+    answer_html,
+    chart_data,
+    computed,
     data: {
       value: primary?.value ?? null,
       cube: selectedCube.cubeName,

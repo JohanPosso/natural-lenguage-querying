@@ -85,12 +85,51 @@ REGLA DE ORO: Si el usuario menciona varias entidades del mismo tipo,
  CONCEPTO 3 — timeFilters (cuándo)
 ============================================================
 Solo año y mes. Nada más.
-  year  -> número de 4 dígitos como string: "2025", "2024"
-  month -> nombre del mes en español, capitalizado: "Enero", "Febrero" ... "Diciembre"
+  year   -> un único año como string: "2025", "2024"
+  years  -> ARRAY cuando el usuario menciona MÚLTIPLES años: ["2024","2025"]
+            USAR years[] siempre que haya más de un año. Nunca pongas dos años en year.
+  month  -> nombre del mes en español, capitalizado: "Enero", "Febrero" ... "Diciembre"
 
 Si el usuario dice "este año" -> usa el año actual de la fecha del sistema.
 Si el usuario dice "el mes pasado" -> calcula el mes anterior al actual.
 Si el usuario NO menciona tiempo -> deja timeFilters vacío {}.
+Si menciona DOS o más años -> pon todos en years[]. Deja year vacío.
+Ejemplo: "total de 2024 y 2025" -> timeFilters: { years: ["2024","2025"] }
+Ejemplo: "de 2022 a 2024" -> timeFilters: { years: ["2022","2023","2024"] }
+
+============================================================
+ CONCEPTO 3b — isBreakdown y breakdownDimension (¿quiere un listado COMPLETO?)
+============================================================
+isBreakdown = true SOLO cuando el usuario quiere TODOS los valores de una dimensión,
+sin especificar valores concretos.
+
+Señales de isBreakdown=true (quiere TODO el listado):
+  - "listado por años" / "listado de todos los años"
+  - "desglose por provincia" / "ver por provincia"
+  - "todos los años", "por cada año", "año a año", "cada mes"
+  - "dame los datos de todos los segmentos"
+  - "muéstrame todos los canales"
+
+Señales de isBreakdown=false (valores concretos, NO un listado completo):
+  - "dame 2010 y 2015" -> timeFilters: { years: ["2010","2015"] }, isBreakdown: false
+  - "en Madrid y Valencia" -> entities con location, isBreakdown: false
+  - "total de 2024 y 2025" -> timeFilters: { years: ["2024","2025"] }, isBreakdown: false
+  - Cualquier pregunta donde el usuario menciona valores ESPECÍFICOS
+
+REGLA CLAVE: Si el usuario especifica valores concretos (años específicos, provincias concretas,
+segmentos nombrados), NO es un desglose — es un filtro múltiple (isBreakdown: false).
+isBreakdown solo es true cuando pide "todos", "cada uno", o no especifica qué valores quiere.
+
+breakdownDimension -> qué dimensión usar para el desglose (concepto semántico):
+  "año"       -> quiere los datos de cada año disponible
+  "mes"       -> quiere los datos mes a mes
+  "provincia" -> quiere los datos por provincia
+  "segmento"  -> quiere los datos por segmento/categoría de vehículo
+  "marca"     -> quiere los datos por marca
+  "canal"     -> quiere los datos por canal de venta
+
+Si isBreakdown=false -> breakdownDimension: null
+Si la pregunta NO es de desglose -> isBreakdown: false, breakdownDimension: null
 
 ============================================================
  CONCEPTO 4 — isFollowUp (¿es continuación?)
@@ -162,6 +201,9 @@ Ejemplos SIN preferredCube:
 3. Si dudas entre dos tipos de entidad, elige el más específico.
 4. Nunca inventes datos que el usuario no dijo.
 5. Si is_out_of_domain es true, deja primaryMetrics: [] y entities: [].
+6. Cuando el usuario menciona DOS o más años -> usa years[] en lugar de year.
+7. Cuando el usuario pide un listado o desglose -> isBreakdown: true y rellena breakdownDimension.
+8. SIEMPRE incluye los campos isBreakdown y breakdownDimension en el JSON (aunque sean false/null).
 `.trim();
 
 // -- Examples para few-shot (se añaden al user message) -----------------------
@@ -292,7 +334,79 @@ Pregunta: "qué cubos tengo disponibles"
   "preferredCube": null,
   "isFollowUp": false,
   "isMetaQuestion": true,
+  "isBreakdown": false,
+  "breakdownDimension": null,
   "domain": "general"
+}
+
+Pregunta: "cual seria el total entre el total del 2024 y 2025"
+{
+  "reasoning": "El usuario quiere el total del mercado para los años 2024 y 2025 — valores concretos, no todo el listado.",
+  "primaryMetrics": ["total mercado", "matriculaciones"],
+  "entities": [],
+  "timeFilters": { "years": ["2024", "2025"] },
+  "preferredCube": null,
+  "isFollowUp": false,
+  "isMetaQuestion": false,
+  "isBreakdown": false,
+  "breakdownDimension": null,
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "dame el total mercado de 2010 y 2015"
+{
+  "reasoning": "El usuario pide dos años concretos — filtro múltiple, no desglose completo.",
+  "primaryMetrics": ["total mercado"],
+  "entities": [],
+  "timeFilters": { "years": ["2010", "2015"] },
+  "preferredCube": null,
+  "isFollowUp": false,
+  "isMetaQuestion": false,
+  "isBreakdown": false,
+  "breakdownDimension": null,
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "de ese listado dame solo el de 2008 y 2009"
+{
+  "reasoning": "El usuario refina el listado anterior seleccionando dos años concretos. Filtro múltiple.",
+  "primaryMetrics": ["total mercado"],
+  "entities": [],
+  "timeFilters": { "years": ["2008", "2009"] },
+  "preferredCube": null,
+  "isFollowUp": true,
+  "isMetaQuestion": false,
+  "isBreakdown": false,
+  "breakdownDimension": null,
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "dame un listado de todo el total mercado en años"
+{
+  "reasoning": "El usuario quiere el total del mercado desglosado año por año — un listado.",
+  "primaryMetrics": ["total mercado"],
+  "entities": [],
+  "timeFilters": {},
+  "preferredCube": null,
+  "isFollowUp": false,
+  "isMetaQuestion": false,
+  "isBreakdown": true,
+  "breakdownDimension": "año",
+  "domain": "vehicle_registration"
+}
+
+Pregunta: "muéstrame las matriculaciones por provincia en 2024"
+{
+  "reasoning": "El usuario quiere el desglose de matriculaciones para cada provincia en 2024.",
+  "primaryMetrics": ["matriculaciones"],
+  "entities": [],
+  "timeFilters": { "year": "2024" },
+  "preferredCube": null,
+  "isFollowUp": false,
+  "isMetaQuestion": false,
+  "isBreakdown": true,
+  "breakdownDimension": "provincia",
+  "domain": "vehicle_registration"
 }
 === FIN DE EJEMPLOS ===
 `;

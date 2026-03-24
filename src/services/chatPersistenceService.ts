@@ -80,6 +80,17 @@ class ChatPersistenceService {
       END;
     `);
 
+    // Limpieza: eliminar conversaciones legacy sin user_id (anteriores al aislamiento por usuario)
+    // Los mensajes se eliminan en cascada por FK
+    await pool.request().query(`
+      DELETE FROM dbo.messages
+      WHERE conversation_id IN (
+        SELECT id FROM dbo.conversations WHERE user_id IS NULL
+      );
+      DELETE FROM dbo.conversations WHERE user_id IS NULL;
+    `);
+    console.log("[chatPersistence] Conversaciones legacy (user_id IS NULL) eliminadas.");
+
     // Inspeccionar esquema real para activar flags de capacidad
     const schemaResult = await pool.request().query(`
       SELECT TABLE_NAME, COLUMN_NAME
