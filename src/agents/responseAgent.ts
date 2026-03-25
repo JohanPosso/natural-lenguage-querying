@@ -64,100 +64,72 @@ export type GenerateResult = {
 
 export const RESPONSE_INSTRUCTIONS = `
 Eres un ANALISTA DE NEGOCIO SENIOR con profundo conocimiento del sector de automoción español.
-Tu trabajo es responder preguntas sobre datos del mercado de forma conversacional, clara y útil.
-Piensa como un experto que no solo da el número sino que lo pone en contexto y ayuda a entender qué significa.
+Tu trabajo es redactar el ANÁLISIS y CONTEXTO de los datos que ya se te presentan formateados.
+El sistema inserta la tabla de datos automáticamente — TÚ NUNCA debes generar tablas ni listas de datos numéricos.
 
 NO menciones bases de datos, cubos, SSAS, MDX, SQL ni ningún término técnico.
-Si tienes datos, los presentas con contexto. Si no los tienes, lo dices honestamente.
+Si tienes datos, los analizas con contexto. Si no los tienes, lo dices honestamente.
 
 ============================================================
- TU PERSONALIDAD Y ESTILO
+ TU ROL EXACTO
 ============================================================
 
-Eres conversador, útil y dinámico. Como un buen analista que habla con su director:
-  - Das el dato, pero también explicas qué significa o qué implica si tienes contexto para ello.
-  - Si el resultado es notable (muy alto, muy bajo, crecimiento interesante), lo comentas.
-  - Si hay múltiples datos, buscas el hilo conductor: ¿qué historia cuentan juntos?
-  - Puedes hacer comparaciones obvias si están en los datos (ej: si hay Madrid y Barcelona, di cuál lidera).
-  - Propones seguimientos relevantes cuando tiene sentido, pero SOLO si es genuinamente útil y no siempre.
-  - Adapta la longitud al tipo de pregunta: una pregunta simple merece una respuesta corta;
-    una pregunta compleja o con muchos datos merece más desarrollo.
+Recibirás los datos ya listos. Tu misión es escribir el TEXTO DE ANÁLISIS que acompaña a esos datos:
+  - ¿Qué significan esos números en el contexto del sector?
+  - ¿Hay alguna tendencia, anomalía o dato destacado?
+  - ¿Qué comparación o conclusión se puede extraer?
+  - ¿Hay algo que el director deba saber más allá del número bruto?
 
 ============================================================
- NÚMEROS Y FORMATO
-============================================================
-  - Siempre en formato español: puntos para miles, coma para decimales.
-    2500 -> 2.500    150000 -> 150.000    3.14 -> 3,14    0.0099 -> 0,99%
-  - Si un valor es 0, di "0" — no digas "sin datos" si el sistema lo calculó.
-  - Si el valor es null o vacío, di que no hay datos disponibles para ese filtro.
-  - Los porcentajes con 2 decimales máximo.
-  - Grandes cifras: menciona si son miles, millones, etc. para facilitar la lectura.
-
-============================================================
- FORMATO HTML DE LA RESPUESTA
+ PERSONALIDAD Y ESTILO
 ============================================================
 
-Usa HTML semántico SOLO cuando el contenido lo justifica. Reglas estrictas:
-
-DATO ÚNICO (una métrica, un valor):
-  -> Responde en texto plano. Sin etiquetas HTML. Mínimo 2-3 frases con contexto.
-
-LISTA DE ITEMS (3 o más items sin relación numérica directa):
-  -> Usa <ul><li>item</li></ul>
-  -> Añade un párrafo de texto ANTES de la lista a modo de introducción.
-  -> Los números clave dentro del texto de cada <li> puedes envolverlos en <strong>.
-
-COMPARATIVA CON VALORES NUMÉRICOS (2+ filas con etiqueta + número):
-  -> Usa una tabla: <table><thead><tr><th>Etiqueta</th><th>Valor</th></tr></thead><tbody>...</tbody></table>
-  -> Siempre incluye un párrafo de análisis DESPUÉS de la tabla.
-  -> Los valores más destacados dentro de <td> puedes envolverlos en <strong>.
-
-RESPUESTA MIXTA (texto + tabla o texto + lista):
-  -> El texto y la estructura HTML se mezclan naturalmente. Escribe el análisis y luego muestra los datos estructurados (o al revés si tiene más sentido).
-
-Tags PERMITIDOS: ul, ol, li, table, thead, tbody, tr, th, td, strong, em, br, p
-Tags PROHIBIDOS: div, span, script, style, a, img, input, form, cualquier atributo on*, href, src, style.
+Conversador, útil y directo. Como un analista que habla con su director:
+  - Comentas lo notable (muy alto, muy bajo, crecimiento, caída inesperada).
+  - Buscas el hilo conductor si hay varios datos.
+  - Propones un seguimiento SOLO si es genuinamente útil, no siempre.
+  - Pregunta simple → respuesta corta (2-3 frases). Pregunta compleja → más desarrollo.
 
 ============================================================
- ESTRUCTURA DINÁMICA DE LA RESPUESTA
+ NÚMEROS EN TU TEXTO
 ============================================================
-
-MÚLTIPLES MÉTRICAS (varias medidas del mismo período):
-  -> Presenta cada dato en tabla, luego un párrafo de síntesis.
-
-MÚLTIPLES FILAS (varias provincias, segmentos, etc.):
-  -> Tabla con los datos, más análisis de quién lidera y qué patrón hay.
-  -> Si hay totales calculados (TOTALES CALCULADOS en el contexto), menciónalos.
-
-COMPARACIÓN TEMPORAL:
-  -> Si hay datos de dos períodos, calcula la variación y coméntala con perspectiva de negocio.
+  - Formato español: puntos para miles, coma para decimales.
+    150000 -> 150.000    3.14 -> 3,14    0.099 -> 9,9%
+  - Los porcentajes con máximo 2 decimales.
+  - Grandes cifras: menciona si son miles, millones, etc.
 
 ============================================================
- EXPANSIÓN DE TÉRMINOS
+ FORMATO DE TU RESPUESTA
 ============================================================
-  - Si recibes una nota de EXPANSIÓN como "SUV -> ASUV, BSUV, BSUV+, CSUV..."
-    significa que el término fue encontrado en varias subcategorías.
-  - Preséntalo agrupado y destaca cuál es el segmento dominante.
-  - NUNCA digas que un término expandido no fue encontrado si hay expansión confirmada.
+
+Tu respuesta es SOLO TEXTO DE ANÁLISIS. No uses tablas ni listas de datos.
+Si quieres destacar algo, puedes usar <strong>texto clave</strong> o <em>énfasis</em>.
+Si necesitas un listado cualitativo (no numérico), usa <ul><li>...</li></ul>.
+
+Tags PERMITIDOS en tu texto: strong, em, ul, ol, li, p, br
+Tags PROHIBIDOS: table, thead, tbody, tr, th, td, div, span, script, a, img.
+
+NO uses markdown con ** o ## — usa <strong> si necesitas negrita.
 
 ============================================================
- FILTROS NO APLICADOS
+ CASO ESPECIAL: PREGUNTA SOBRE DISPONIBILIDAD DE DATOS
 ============================================================
-  - Solo si hay [WARN] FILTROS NO APLICADOS, menciónalo con honestidad.
-  - Propón alternativa si tiene sentido.
+
+Si el usuario pregunta qué datos hay disponibles, qué métricas existen, o qué puedes consultar:
+  - Responde con una descripción clara de las métricas disponibles.
+  - Usa <ul><li>nombre de métrica — descripción breve</li></ul> para listarlas.
+  - Agrupa por categoría si hay muchas.
 
 ============================================================
  LO QUE NUNCA DEBES HACER
 ============================================================
+× Generar una tabla con datos numéricos (el sistema lo hace automáticamente).
 × Mencionar "cubo", "SSAS", "MDX", "jerarquía", "base de datos", "catálogo".
 × Inventar datos o cifras que no estén en los resultados recibidos.
-× Hacer cálculos complejos que no estén ya calculados (puedes referenciar los TOTALES CALCULADOS que te pasen).
 × Usar frases vacías como "¡Claro que sí!", "¡Por supuesto!", "¡Excelente pregunta!".
 × Repetir la pregunta del usuario al inicio de tu respuesta.
-× Dar una sola frase cuando hay contexto valioso que añadir. El mínimo útil son 2-3 frases.
-× Ser excesivamente largo cuando la respuesta es sencilla (máximo 4-5 frases para preguntas directas).
-× Usar etiquetas HTML que no estén en la lista de permitidos.
-× No uses markdown con ** o ## para resaltar texto. Usa <strong> cuando el HTML sea apropiado.
+× Responder con una sola frase cuando hay contexto valioso que añadir (mínimo 2-3 frases).
+× Ser excesivamente largo para preguntas simples (máximo 4-5 frases).
 `.trim();
 
 // -- HTML allowlist sanitizer --------------------------------------------------
@@ -196,10 +168,96 @@ function sanitizeHtml(html: string): string {
 }
 
 /**
- * Detecta si una cadena contiene HTML semántico relevante (no solo texto plano).
+ * Detecta si una cadena contiene HTML semántico estructural (tablas, listas, párrafos).
  */
 function containsHtml(text: string): boolean {
-  return /<(ul|ol|table|strong|em|br|p)\b/i.test(text);
+  return /<(ul|ol|table|strong|em|p)\b/i.test(text);
+}
+
+/**
+ * Convierte texto plano a HTML básico: párrafos separados por línea en blanco,
+ * saltos de línea simples como <br>. Garantiza que answer_html nunca sea null.
+ */
+function plainTextToHtml(text: string): string {
+  const paragraphs = text.split(/\n{2,}/);
+  return paragraphs
+    .map((p) => `<p>${p.replace(/\n/g, "<br>").trim()}</p>`)
+    .filter((p) => p !== "<p></p>")
+    .join("\n");
+}
+
+/** Detecta si una línea parece fila de tabla Markdown (tiene al menos un |) */
+function isPipeRow(line: string): boolean {
+  const t = line.trim();
+  return t.includes("|") && !t.startsWith("<");
+}
+
+/** Detecta si una línea es la fila separadora de una tabla Markdown (---|---) */
+function isSeparatorRow(line: string): boolean {
+  return /^[\s|\-:]+$/.test(line.trim()) && line.includes("-") && line.includes("|");
+}
+
+/** Parsea las celdas de una fila Markdown eliminando pipes vacíos de los extremos */
+function parsePipeCells(row: string): string[] {
+  return row
+    .split("|")
+    .map((c) => c.trim())
+    .filter((c, i, arr) => !(i === 0 && c === "") && !(i === arr.length - 1 && c === ""));
+}
+
+/** Construye un <table> HTML a partir de filas de datos (sin separadores) */
+function buildHtmlTableFromRows(dataRows: string[]): string {
+  if (dataRows.length < 2) return dataRows.join("\n");
+  const [headerRow, ...bodyRows] = dataRows;
+  const headers = parsePipeCells(headerRow);
+  if (headers.length < 2) return dataRows.join("\n");
+  const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
+  const tbody = bodyRows.length > 0
+    ? `<tbody>${bodyRows
+        .map((row) => {
+          const cells = parsePipeCells(row);
+          return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+        })
+        .join("")}</tbody>`
+    : "";
+  return `<table>${thead}${tbody}</table>`;
+}
+
+/**
+ * Pre-procesa la respuesta del LLM antes de sanitizarla:
+ * 1. Normaliza <br> de vuelta a saltos de línea
+ * 2. Convierte tablas Markdown (pipe format) a <table> HTML
+ */
+function preprocessLlmResponse(raw: string): string {
+  // Normalizar <br> para poder procesar línea a línea
+  let text = raw.replace(/<br\s*\/?>/gi, "\n");
+
+  const lines = text.split("\n");
+  const output: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    if (isPipeRow(lines[i]) && !isSeparatorRow(lines[i])) {
+      // Recoger todas las filas de la tabla (pipe rows + separator rows)
+      const tableLines: string[] = [];
+      while (i < lines.length && (isPipeRow(lines[i]) || isSeparatorRow(lines[i]))) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      // Separar filas de datos (sin las separadoras ---)
+      const dataRows = tableLines.filter((l) => !isSeparatorRow(l));
+      if (dataRows.length >= 2) {
+        output.push(buildHtmlTableFromRows(dataRows));
+      } else {
+        output.push(...tableLines);
+      }
+    } else {
+      output.push(lines[i]);
+      i++;
+    }
+  }
+
+  return output.join("\n");
 }
 
 /**
@@ -277,6 +335,103 @@ function htmlToPlainText(html: string): string {
   return result;
 }
 
+// -- Backend-driven HTML builders ---------------------------------------------
+
+/**
+ * Construye una <table> HTML directamente desde ctx.results.
+ * El backend siempre es la fuente de verdad para la estructura de datos.
+ * Devuelve null si hay 0 o 1 resultado (no se necesita tabla).
+ */
+function buildResultsTableHtml(ctx: ResponseContext): string | null {
+  const rows = ctx.results.filter((r) => r.value !== null && r.value !== undefined);
+  if (rows.length < 2) return null;
+
+  const measureNames = [...new Set(rows.map((r) => r.measure_name))];
+  const hasMultipleMeasures = measureNames.length > 1;
+  const hasDimensions = rows.some((r) => Object.keys(r.dimensions ?? {}).length > 0);
+
+  // Determinar la dimensión principal (primera clave de dimensions)
+  const firstDimKey = Object.keys(rows.find((r) => r.dimensions && Object.keys(r.dimensions).length > 0)?.dimensions ?? {})[0];
+
+  let headerRow: string;
+  if (hasMultipleMeasures && hasDimensions) {
+    headerRow = `<tr><th>Métrica</th><th>${firstDimKey ?? "Categoría"}</th><th>Valor</th></tr>`;
+  } else if (hasMultipleMeasures) {
+    headerRow = `<tr><th>Métrica</th><th>Valor</th></tr>`;
+  } else {
+    headerRow = `<tr><th>${firstDimKey ?? "Categoría"}</th><th>${measureNames[0] ?? "Valor"}</th></tr>`;
+  }
+
+  const bodyRows = rows.map((r) => {
+    const val = `<strong>${smartFormatValue(r.value, r.measure_name)}</strong>`;
+    const dimVal = Object.values(r.dimensions ?? {}).join(", ") || "—";
+
+    if (hasMultipleMeasures && hasDimensions) {
+      return `<tr><td>${r.measure_name}</td><td>${dimVal}</td><td>${val}</td></tr>`;
+    } else if (hasMultipleMeasures) {
+      return `<tr><td>${r.measure_name}</td><td>${val}</td></tr>`;
+    } else {
+      return `<tr><td>${dimVal}</td><td>${val}</td></tr>`;
+    }
+  }).join("");
+
+  // Nota de totales calculados al pie de la tabla
+  let footer = "";
+  if (ctx.computed && ctx.computed.count > 1 && ctx.computed.sum !== null) {
+    const c = ctx.computed;
+    const parts: string[] = [];
+    if (c.sum !== null) parts.push(`Total: <strong>${c.sum.toLocaleString("es-ES")}</strong>`);
+    if (c.avg !== null) parts.push(`Promedio: ${c.avg.toLocaleString("es-ES")}`);
+    footer = `<p class="table-summary">${parts.join(" &nbsp;|&nbsp; ")}</p>`;
+  }
+
+  return `<table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table>${footer}`;
+}
+
+/**
+ * Elimina cualquier tabla que el LLM haya generado en su respuesta.
+ * El backend construye las tablas desde los datos estructurados.
+ */
+function stripLlmTables(text: string): string {
+  // Eliminar <table>...</table>
+  let result = text.replace(/<table[\s\S]*?<\/table>/gi, "").trim();
+  // Eliminar tablas Markdown pipe (líneas con |)
+  result = result
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      // Excluir líneas que sean filas de tabla (tienen |) y líneas separadoras (---)
+      if (/^[\s|:\-]+$/.test(t) && t.includes("-")) return false;
+      if (t.includes("|") && !t.startsWith("<") && t.split("|").length > 2) return false;
+      return true;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return result;
+}
+
+/**
+ * Convierte listas de items en texto plano (separadas por comas, punto y coma
+ * o saltos de línea) a <ul><li> cuando detecta una enumeración larga (5+ items).
+ * Útil para meta-preguntas como "qué métricas hay disponibles".
+ */
+function autoListify(text: string): string {
+  // Si ya tiene <ul> o <li>, no tocar
+  if (/<ul|<li/i.test(text)) return text;
+
+  // Detectar párrafos que son enumeraciones: 5+ items separados por coma/punto y coma
+  return text.replace(/(<p>|^)(([^<\n]{3,60}[,;]\s*){4,}[^<\n]{3,60})(<\/p>|$)/gm, (match, open, content, _last, close) => {
+    const items = content
+      .split(/[,;]/)
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 1);
+    if (items.length < 5) return match;
+    const listHtml = `<ul>${items.map((i: string) => `<li>${i}</li>`).join("")}</ul>`;
+    return `${open || ""}${listHtml}${close || ""}`;
+  });
+}
+
 // -- Agent function -------------------------------------------------------------
 
 /** Extrae el tiempo de espera en ms desde un error 429 */
@@ -290,7 +445,7 @@ function extract429WaitMs(err: unknown, attempt: number): number {
 export async function generate(ctx: ResponseContext): Promise<GenerateResult> {
   if (ctx.results.length === 0) {
     const text = buildEmptyResponse(ctx);
-    return { answer: text, answer_html: null };
+    return { answer: text, answer_html: plainTextToHtml(text) };
   }
 
   const userMessage = buildUserMessage(ctx);
@@ -304,10 +459,28 @@ export async function generate(ctx: ResponseContext): Promise<GenerateResult> {
       const response = await callAgent(env.azureWorkerAgentId, RESPONSE_INSTRUCTIONS, msg);
       if (response && response.trim().length > 30) {
         console.log(`[Agent3:Redactor] OK en intento ${attempt}`);
-        const raw = response.trim();
-        const hasHtml = containsHtml(raw);
-        const answer_html = hasHtml ? sanitizeHtml(raw) : null;
-        const answer = hasHtml ? htmlToPlainText(raw) : raw;
+
+        // 1. Pre-procesar respuesta del LLM
+        const processed = preprocessLlmResponse(response.trim());
+
+        // 2. Quitar cualquier tabla que el LLM haya generado (el backend las construye)
+        const cleanedLlm = stripLlmTables(processed);
+
+        // 3. Construir tabla HTML desde los datos estructurados (fiable, siempre bien formateada)
+        const dataTable = buildResultsTableHtml(ctx);
+
+        // 4. Preparar el análisis del LLM como HTML
+        const hasHtml = containsHtml(cleanedLlm);
+        let analysisHtml = hasHtml ? sanitizeHtml(cleanedLlm) : plainTextToHtml(cleanedLlm);
+        analysisHtml = autoListify(analysisHtml);
+
+        // 5. Combinar: tabla de datos + análisis del LLM
+        const answer_html = [dataTable, analysisHtml].filter(Boolean).join("\n");
+        const answer = [
+          dataTable ? htmlToPlainText(dataTable) : null,
+          hasHtml ? htmlToPlainText(cleanedLlm) : cleanedLlm
+        ].filter(Boolean).join("\n\n");
+
         return { answer, answer_html };
       }
       console.warn(`[Agent3:Redactor] intento ${attempt}: respuesta vacía o muy corta`);
@@ -421,13 +594,21 @@ function buildUserMessage(ctx: ResponseContext): string {
   }
 
   lines.push("");
-  lines.push(
-    "Escribe una respuesta EN ESPAÑOL, conversacional y analítica. " +
-    "Usa HTML semántico (tabla o lista) cuando haya 2+ datos comparables. " +
-    "OBLIGATORIO: incluye al menos el dato principal + una interpretación/contexto. " +
-    "NUNCA respondas con una sola frase. Mínimo 2-3 frases bien conectadas. " +
-    "Actúa como un analista de negocio experto que habla con su director, no como un buscador."
-  );
+  if (ctx.results.length > 1) {
+    lines.push(
+      "INSTRUCCIÓN: La tabla con los datos anteriores se inserta AUTOMÁTICAMENTE en la respuesta. " +
+      "NO generes ninguna tabla ni lista de datos numéricos. " +
+      "Escribe SOLO el análisis/contexto en texto: qué significan los datos, tendencias, comparaciones, conclusión. " +
+      "Mínimo 2-3 frases bien conectadas. Actúa como analista de negocio experto."
+    );
+  } else {
+    lines.push(
+      "Escribe una respuesta EN ESPAÑOL, conversacional y analítica. " +
+      "OBLIGATORIO: incluye el dato principal + una interpretación/contexto. " +
+      "NUNCA respondas con una sola frase. Mínimo 2-3 frases bien conectadas. " +
+      "NO uses markdown con ** o ##. Usa <strong> si quieres resaltar algo."
+    );
+  }
 
   return lines.join("\n");
 }
@@ -468,7 +649,7 @@ function buildFallbackResponse(ctx: ResponseContext): GenerateResult {
       `El valor de ${r.measure_name} es ${val}` +
       (dimParts ? ` para ${dimParts}` : "") +
       (filterDesc ? ` (filtros: ${filterDesc})` : "") + ".";
-    return { answer: text, answer_html: null };
+    return { answer: text, answer_html: plainTextToHtml(text) };
   }
 
   // Múltiples resultados: construir tabla HTML

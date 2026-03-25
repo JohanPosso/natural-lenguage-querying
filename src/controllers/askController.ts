@@ -1055,6 +1055,7 @@ function extractDimensionLabel(row: Record<string, unknown>): string | null {
 /**
  * Ejecuta una consulta MDX de desglose (con dimensión en ROWS).
  * Formato: SELECT {[Measure]} ON COLUMNS, {[Hierarchy].Members} ON ROWS FROM [Cube]
+ * Si se pasan specificRowMembers, usa solo esos miembros en ON ROWS en lugar de .Members.
  * Parsea todas las filas y devuelve un MeasureResult por fila.
  */
 async function executeBreakdownQuery(
@@ -1062,13 +1063,20 @@ async function executeBreakdownQuery(
   measure: LlmSelection["measures"][number],
   breakdownHierarchy: string,
   extraFilters: FilterTuple[],
-  traceId: string
+  traceId: string,
+  specificRowMembers?: FilterTuple[]
 ): Promise<MeasureResult[]> {
   const whereClause = extraFilters.length > 0
     ? ` WHERE ( ${extraFilters.map((t) => t.member_unique_name).join(", ")} )`
     : "";
 
-  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS, { ${breakdownHierarchy}.Members } ON ROWS FROM [${cube.xmlaCubeName}]${whereClause}`;
+  // Si el usuario pidió miembros concretos para la dimensión de desglose (ej: años 2023, 2024, 2025)
+  // los usamos directamente en ON ROWS en vez de traer todos con .Members
+  const rowsSet = specificRowMembers && specificRowMembers.length > 0
+    ? `{ ${specificRowMembers.map((m) => m.member_unique_name).join(", ")} }`
+    : `{ ${breakdownHierarchy}.Members }`;
+
+  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS, ${rowsSet} ON ROWS FROM [${cube.xmlaCubeName}]${whereClause}`;
 
   pLog("  [BREAKDOWN]", BLUE, "MDX desglose", mdx.replace(/\s+/g, " ").slice(0, 200));
 
@@ -1393,11 +1401,13 @@ export async function runAskPipeline(
        promptNorm.includes("funciona") || promptNorm.includes("sirves") || promptNorm.includes("sei"));
 
     if (isSelfDescription || (!intent.preferredCube && !mentionsCube && promptNorm.match(/^(que eres|quien eres|que puedes|para que sirves|como funciona)/))) {
-      const cubeNames = visibleCubes.map((c) => `"${c.catalog}"`).join(", ");
+      const cubeItems = visibleCubes.map((c) => `<li><strong>${c.catalog}</strong></li>`).join("");
+      const answer = `Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector. Tengo acceso a los siguientes conjuntos de datos: ${visibleCubes.map((c) => `"${c.catalog}"`).join(", ")}. Puedes preguntarme cosas como "¿cuántas matriculaciones hubo en 2024?", "¿cuál es la cuota de mercado de Nissan?", o "¿qué vendió Madrid el año pasado?"`;
+      const answer_html = `<p>Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector.</p><p>Tengo acceso a los siguientes conjuntos de datos:</p><ul>${cubeItems}</ul><p>Puedes preguntarme cosas como <em>"¿cuántas matriculaciones hubo en 2024?"</em>, <em>"¿cuál es la cuota de mercado de Nissan?"</em>, o <em>"¿qué vendió Madrid el año pasado?"</em></p>`;
       return {
         question: prompt,
-        answer: `Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector. Tengo acceso a los datos de los siguientes cubos: ${cubeNames}. Puedes preguntarme cosas como "¿cuántas matriculaciones hubo en 2024?", "¿cuál es la cuota de mercado de Nissan?", o "¿qué vendió Madrid el año pasado?"`,
-        answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+        answer,
+        answer_html, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
       };
     }
 
@@ -1423,29 +1433,38 @@ export async function runAskPipeline(
             .map((m) => m.friendlyName)
             .slice(0, 10)
         )];
+        const totalMeasures = targetCube.members.filter((m) => m.type === "measure").length;
         const measureNames = measures.map((m) => m.friendlyName).join(", ");
         const dimNames = dims.join(", ");
-        const totalMeasures = targetCube.members.filter((m) => m.type === "measure").length;
 
-        const description =
-          `El cubo "${targetCube.catalog}" contiene ${totalMeasures} medidas. ` +
+        const answer =
+          `El conjunto de datos "${targetCube.catalog}" contiene ${totalMeasures} medidas. ` +
           (measureNames ? `Las principales son: ${measureNames}. ` : "") +
           (dimNames ? `Puedes filtrar la información por: ${dimNames}.` : "");
 
+        const measureItems = measures.map((m) => `<li>${m.friendlyName}</li>`).join("");
+        const dimItems = dims.map((d) => `<li>${d}</li>`).join("");
+        const answer_html =
+          `<p>El conjunto de datos <strong>"${targetCube.catalog}"</strong> contiene <strong>${totalMeasures} métricas</strong>.</p>` +
+          (measureItems ? `<p>Principales métricas disponibles:</p><ul>${measureItems}</ul>` : "") +
+          (dimItems ? `<p>Puedes filtrar o desglosar por:</p><ul>${dimItems}</ul>` : "");
+
         return {
           question: prompt,
-          answer: description,
-          answer_html: null, chart_data: null, computed: null, data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
+          answer,
+          answer_html, chart_data: null, computed: null, data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
         };
       }
     }
 
     // 3) Generic: list all accessible cubes
     const cubeList = visibleCubes.map((c) => `"${c.catalog}"`).join(", ");
+    const cubeItems = visibleCubes.map((c) => `<li><strong>${c.catalog}</strong></li>`).join("");
     return {
       question: prompt,
-      answer: `Tienes acceso a los siguientes cubos de datos: ${cubeList}. Puedes preguntarme sobre cualquiera de ellos.`,
-      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer: `Tienes acceso a los siguientes conjuntos de datos: ${cubeList}. Puedes preguntarme sobre cualquiera de ellos.`,
+      answer_html: `<p>Tienes acceso a los siguientes conjuntos de datos:</p><ul>${cubeItems}</ul><p>Puedes preguntarme sobre cualquiera de ellos.</p>`,
+      chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1791,9 +1810,23 @@ export async function runAskPipeline(
         traceId, dimension: intent.breakdownDimension, hierarchy: breakdownHierarchy
       });
 
-      // Filtros que van en WHERE (todos los que NO son la misma jerarquía del desglose)
+      // Jerarquía raíz del desglose (ej: "[Fecha]" para "[Fecha].[Año]")
+      const breakdownRoot = breakdownHierarchy.split(".")[0] ?? "NOPE";
+
+      // Miembros específicos del filtro que coinciden con la dimensión de desglose
+      // (ej: si el usuario pidió años 2023, 2024, 2025 y el desglose es por año)
+      const specificRowMembers: FilterTuple[] = resolvedFilterGroups
+        .filter((g) => g.hierarchy_mdx.startsWith(breakdownRoot))
+        .flatMap((g) => g.members.map((m) => ({
+          dimension_friendly: g.hierarchy_friendly,
+          dimension_mdx: g.hierarchy_mdx,
+          value_caption: m.value_caption,
+          member_unique_name: m.member_unique_name
+        })));
+
+      // Filtros que van en WHERE: los que NO corresponden a la dimensión de desglose
       const extraFilters: FilterTuple[] = resolvedFilterGroups
-        .filter((g) => !g.hierarchy_mdx.startsWith(breakdownHierarchy.split(".")[0] ?? "NOPE"))
+        .filter((g) => !g.hierarchy_mdx.startsWith(breakdownRoot))
         .flatMap((g) => g.members.map((m) => ({
           dimension_friendly: g.hierarchy_friendly,
           dimension_mdx: g.hierarchy_mdx,
@@ -1803,7 +1836,8 @@ export async function runAskPipeline(
 
       for (const measure of validatedMeasures) {
         const rows = await executeBreakdownQuery(
-          selectedCube, measure, breakdownHierarchy, extraFilters, traceId
+          selectedCube, measure, breakdownHierarchy, extraFilters, traceId,
+          specificRowMembers.length > 0 ? specificRowMembers : undefined
         );
         allResults.push(...rows);
       }
