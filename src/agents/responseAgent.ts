@@ -11,6 +11,7 @@
 
 import { callAgent } from "../services/agentRegistry";
 import { env } from "../config/env";
+import { RESPONSE_MAX_DIMENSION_COLUMNS } from "../config/responseLimits";
 
 // -- Types ---------------------------------------------------------------------
 
@@ -18,6 +19,8 @@ export type SsasResult = {
   measure_name: string;
   value: string | number;
   dimensions?: Record<string, string>;
+  /** Fila de total de contexto en desglose (visor); se pinta en tfoot. */
+  is_breakdown_total_row?: boolean;
 };
 
 export type AppliedFilter = {
@@ -28,6 +31,15 @@ export type AppliedFilter = {
 export type UnresolvedFilter = {
   friendly_name: string;
   values: string[];
+};
+
+/** Filtro resuelto con coincidencia no exacta (para aviso breve al usuario) */
+export type LowConfidenceFilterHint = {
+  friendly_name: string;
+  user_value: string;
+  resolved_as: string;
+  /** "high" | "medium" | "low" */
+  level: string;
 };
 
 export type FilterExpansion = {
@@ -45,6 +57,14 @@ export type ComputedAggregations = {
   label: string;
 };
 
+/** Aviso cuando la respuesta no incluye todos los registros o dimensiones */
+export type ResponseTruncation = {
+  totalRowCount: number;
+  shownRows: number;
+  truncatedRows: boolean;
+  truncatedColumns: boolean;
+};
+
 export type ResponseContext = {
   originalQuestion: string;
   cubeName: string;
@@ -52,7 +72,11 @@ export type ResponseContext = {
   appliedFilters: AppliedFilter[];
   unresolvedFilters: UnresolvedFilter[];
   filterExpansions?: FilterExpansion[];
+  /** Coincidencias aproximadas en filtros (medium/low) */
+  lowConfidenceFilterHints?: LowConfidenceFilterHint[];
   computed?: ComputedAggregations | null;
+  /** Si hay más datos en SSAS de los que se muestran (filas / columnas de dimensión) */
+  truncation?: ResponseTruncation | null;
 };
 
 export type GenerateResult = {
@@ -119,6 +143,17 @@ Si el usuario pregunta qué datos hay disponibles, qué métricas existen, o qu�
   - Responde con una descripción clara de las métricas disponibles.
   - Usa <ul><li>nombre de métrica — descripción breve</li></ul> para listarlas.
   - Agrupa por categoría si hay muchas.
+
+============================================================
+ DATOS DEL SISTEMA (CRÍTICO)
+============================================================
+Los valores vienen del análisis tal cual: cada fila es un dato devuelto por el sistema.
+× NUNCA calcules por tu cuenta sumas, totales, promedios, medias ni operaciones entre filas,
+  salvo que el bloque "TOTALES CALCULADOS" aparezca explícitamente más abajo (solo entonces
+  puedes citar ese total como apoyo, y solo si el usuario pidió un agregado).
+× Si hay texto o unidades mezcladas con números en una celda, trata el valor como dato literal;
+  no lo conviertas ni lo combines con otros.
+× No interpretes un listado como "el total es X" sumando filas: describe lo que muestra cada fila.
 
 ============================================================
  LO QUE NUNCA DEBES HACER
@@ -346,12 +381,17 @@ function buildResultsTableHtml(ctx: ResponseContext): string | null {
   const rows = ctx.results.filter((r) => r.value !== null && r.value !== undefined);
   if (rows.length < 2) return null;
 
-  const measureNames = [...new Set(rows.map((r) => r.measure_name))];
+  const detailRows = rows.filter((r) => !r.is_breakdown_total_row);
+  const totalRows = rows.filter((r) => r.is_breakdown_total_row);
+
+  const measureNames = [...new Set(detailRows.map((r) => r.measure_name))];
   const hasMultipleMeasures = measureNames.length > 1;
-  const hasDimensions = rows.some((r) => Object.keys(r.dimensions ?? {}).length > 0);
+  const hasDimensions = detailRows.some((r) => Object.keys(r.dimensions ?? {}).length > 0);
 
   // Determinar la dimensión principal (primera clave de dimensions)
-  const firstDimKey = Object.keys(rows.find((r) => r.dimensions && Object.keys(r.dimensions).length > 0)?.dimensions ?? {})[0];
+  const firstDimKey = Object.keys(
+    detailRows.find((r) => r.dimensions && Object.keys(r.dimensions).length > 0)?.dimensions ?? {}
+  )[0];
 
   let headerRow: string;
   if (hasMultipleMeasures && hasDimensions) {
@@ -362,7 +402,7 @@ function buildResultsTableHtml(ctx: ResponseContext): string | null {
     headerRow = `<tr><th>${firstDimKey ?? "Categoría"}</th><th>${measureNames[0] ?? "Valor"}</th></tr>`;
   }
 
-  const bodyRows = rows.map((r) => {
+  const bodyRows = detailRows.map((r) => {
     const val = `<strong>${smartFormatValue(r.value, r.measure_name)}</strong>`;
     const dimVal = Object.values(r.dimensions ?? {}).join(", ") || "—";
 
@@ -375,17 +415,51 @@ function buildResultsTableHtml(ctx: ResponseContext): string | null {
     }
   }).join("");
 
+  const footerRows =
+    totalRows.length > 0
+      ? `<tfoot>${totalRows
+          .map((r) => {
+            const val = `<strong>${smartFormatValue(r.value, r.measure_name)}</strong>`;
+            const dimVal = Object.values(r.dimensions ?? {}).join(", ") || "—";
+            if (hasMultipleMeasures && hasDimensions) {
+              return `<tr class="breakdown-total-row"><td>${r.measure_name}</td><td>${dimVal}</td><td>${val}</td></tr>`;
+            }
+            if (hasMultipleMeasures) {
+              return `<tr class="breakdown-total-row"><td>${r.measure_name}</td><td>${val}</td></tr>`;
+            }
+            return `<tr class="breakdown-total-row"><td>${dimVal}</td><td>${val}</td></tr>`;
+          })
+          .join("")}</tfoot>`
+      : "";
+
   // Nota de totales calculados al pie de la tabla
   let footer = "";
   if (ctx.computed && ctx.computed.count > 1 && ctx.computed.sum !== null) {
     const c = ctx.computed;
     const parts: string[] = [];
-    if (c.sum !== null) parts.push(`Total: <strong>${c.sum.toLocaleString("es-ES")}</strong>`);
+    if (c.sum !== null) parts.push(`Total (solicitado): <strong>${c.sum.toLocaleString("es-ES")}</strong>`);
     if (c.avg !== null) parts.push(`Promedio: ${c.avg.toLocaleString("es-ES")}`);
     footer = `<p class="table-summary">${parts.join(" &nbsp;|&nbsp; ")}</p>`;
   }
 
-  return `<table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table>${footer}`;
+  const t = ctx.truncation;
+  let cap = "";
+  if (t && (t.truncatedRows || t.truncatedColumns)) {
+    const parts: string[] = [];
+    if (t.truncatedRows) {
+      parts.push(
+        `Mostrando <strong>${t.shownRows}</strong> de <strong>${t.totalRowCount.toLocaleString("es-ES")}</strong> filas`
+      );
+    }
+    if (t.truncatedColumns) {
+      parts.push(
+        `máximo <strong>${RESPONSE_MAX_DIMENSION_COLUMNS}</strong> columnas de dimensión por fila`
+      );
+    }
+    cap = `<p class="response-truncation-notice">${parts.join(". ")}.</p>`;
+  }
+
+  return `${cap}<table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody>${footerRows}</table>${footer}`;
 }
 
 /**
@@ -532,6 +606,15 @@ function buildUserMessage(ctx: ResponseContext): string {
 
   lines.push(`Pregunta del usuario: "${ctx.originalQuestion}"`);
 
+  if (ctx.truncation && (ctx.truncation.truncatedRows || ctx.truncation.truncatedColumns)) {
+    const t = ctx.truncation;
+    lines.push(
+      `AVISO LÍMITE DE DATOS: ${t.truncatedRows ? `solo se muestran ${t.shownRows} filas de ${t.totalRowCount} totales.` : ""}` +
+        `${t.truncatedColumns ? ` Algunas filas tienen muchas dimensiones; solo se incluyen las primeras ${RESPONSE_MAX_DIMENSION_COLUMNS} columnas de dimensión.` : ""}` +
+        " No digas que tienes el universo completo; puedes mencionar que la vista está limitada."
+    );
+  }
+
   const percentageMeasures = ctx.results
     .map((r) => r.measure_name)
     .filter(isPercentageMeasure);
@@ -546,7 +629,7 @@ function buildUserMessage(ctx: ResponseContext): string {
     lines.push(`Filtros aplicados: ${filterDesc}`);
   }
 
-  // Totales calculados en Node.js (exactos)
+  // Totales solo si el usuario pidió suma/total y todos los valores fueron numéricos puros
   if (ctx.computed && ctx.computed.count > 1) {
     const c = ctx.computed;
     const parts: string[] = [`count=${c.count}`];
@@ -554,7 +637,12 @@ function buildUserMessage(ctx: ResponseContext): string {
     if (c.avg != null) parts.push(`promedio=${c.avg.toLocaleString("es-ES")}`);
     if (c.max != null) parts.push(`máximo=${c.max.toLocaleString("es-ES")}`);
     if (c.min != null) parts.push(`mínimo=${c.min.toLocaleString("es-ES")}`);
-    lines.push(`TOTALES CALCULADOS (${c.label}): ${parts.join(", ")}`);
+    lines.push(`TOTALES CALCULADOS (${c.label}) — el usuario pidió agregado; puedes citarlos: ${parts.join(", ")}`);
+  } else {
+    lines.push(
+      "NO hay totales ni sumas automáticas: los números son fila a fila del sistema. " +
+        "No inventes sumas ni promedios entre filas."
+    );
   }
 
   lines.push("");
@@ -590,6 +678,18 @@ function buildUserMessage(ctx: ResponseContext): string {
     lines.push("[WARN] FILTROS NO APLICADOS (informa al usuario de estos — no tienen datos):");
     for (const f of ctx.unresolvedFilters) {
       lines.push(`  - ${f.friendly_name || "Filtro"}: ${f.values.join(", ")}`);
+    }
+  }
+
+  if (ctx.lowConfidenceFilterHints && ctx.lowConfidenceFilterHints.length > 0) {
+    lines.push("");
+    lines.push(
+      "COINCIDENCIAS APROXIMADAS EN FILTROS (los datos usan la interpretación indicada; si es ambigua, dilo en una frase):"
+    );
+    for (const h of ctx.lowConfidenceFilterHints) {
+      lines.push(
+        `  - ${h.friendly_name}: "${h.user_value}" → se usó "${h.resolved_as}" (confianza ${h.level})`
+      );
     }
   }
 
@@ -659,12 +759,15 @@ function buildFallbackResponse(ctx: ResponseContext): GenerateResult {
     return `<tr><td>${dimLabel}</td><td><strong>${val}</strong></td></tr>`;
   }).join("");
 
-  const computedNote = ctx.computed?.sum != null
-    ? `<p><strong>Total: ${ctx.computed.sum.toLocaleString("es-ES")}</strong>${filterDesc ? ` (${filterDesc})` : ""}</p>`
-    : "";
+  const computedNote =
+    ctx.computed?.sum != null
+      ? `<p><strong>Total (solicitado): ${ctx.computed.sum.toLocaleString("es-ES")}</strong>${filterDesc ? ` (${filterDesc})` : ""}</p>`
+      : "";
 
   const answer_html = `<table><thead><tr><th>Concepto</th><th>Valor</th></tr></thead><tbody>${rows}</tbody></table>${computedNote}`;
-  const answer = htmlToPlainText(answer_html) + (ctx.computed?.sum != null ? ` Total: ${ctx.computed.sum.toLocaleString("es-ES")}.` : "");
+  const answer =
+    htmlToPlainText(answer_html) +
+    (ctx.computed?.sum != null ? ` Total: ${ctx.computed.sum.toLocaleString("es-ES")}.` : "");
 
   if (ctx.unresolvedFilters.length > 0) {
     const unresolved = ctx.unresolvedFilters.flatMap((f) => f.values).join(", ");
@@ -686,6 +789,9 @@ function buildCompactMessage(ctx: ResponseContext): string {
     return `${row.measure_name}: ${val}${dims ? ` (${dims})` : ""}`;
   }).join(". ");
   const filters = ctx.appliedFilters.map((f) => `${f.friendly_name}=${f.values.join(",")}`).join("; ");
-  const computed = ctx.computed?.sum != null ? ` Suma total: ${ctx.computed.sum.toLocaleString("es-ES")}.` : "";
-  return `Pregunta: "${ctx.originalQuestion}". Datos: ${data}.${computed} ${filters ? "Filtros: " + filters + "." : ""} Responde en español con HTML semántico (tabla si hay varios datos).`;
+  const computed =
+    ctx.computed?.sum != null
+      ? ` Suma (solo porque el usuario pidió total): ${ctx.computed.sum.toLocaleString("es-ES")}.`
+      : "";
+  return `Pregunta: "${ctx.originalQuestion}". Datos: ${data}.${computed} ${filters ? "Filtros: " + filters + "." : ""} Responde en español con HTML semántico (tabla si hay varios datos). No inventes totales.`;
 }

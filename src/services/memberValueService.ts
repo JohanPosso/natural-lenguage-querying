@@ -78,12 +78,12 @@ class MemberValueService {
    * Resuelve un valor de filtro contra los valores precargados en SQL.
    * Scoring idéntico al de mdxBridgeService para garantizar compatibilidad.
    */
-  async resolveMember(
+  async resolveMemberWithScore(
     catalog: string,
     xmlaCubeName: string,
     hierarchyUniqueName: string,
     rawValue: string
-  ): Promise<ResolvedMember | null> {
+  ): Promise<{ caption: string; uniqueName: string; score: number } | null> {
     const pool = await this.getReadyPool();
     const norm = normalizeText(rawValue);
     if (!norm) return null;
@@ -120,9 +120,17 @@ class MemberValueService {
       }
     }
 
-    return best && best.score > 0
-      ? { caption: best.caption, uniqueName: best.uniqueName }
-      : null;
+    return best && best.score > 0 ? best : null;
+  }
+
+  async resolveMember(
+    catalog: string,
+    xmlaCubeName: string,
+    hierarchyUniqueName: string,
+    rawValue: string
+  ): Promise<ResolvedMember | null> {
+    const r = await this.resolveMemberWithScore(catalog, xmlaCubeName, hierarchyUniqueName, rawValue);
+    return r ? { caption: r.caption, uniqueName: r.uniqueName } : null;
   }
 
   /**

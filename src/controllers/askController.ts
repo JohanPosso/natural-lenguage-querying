@@ -2,14 +2,31 @@ import type { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { mdxBridgeService } from "../services/mdxBridgeService";
 import { catalogService } from "../services/catalogService";
+import {
+  resolveBreakdownHierarchySemantic,
+  shouldHideHierarchyInPrompt
+} from "../services/breakdownHierarchyResolver";
 import { memberValueService } from "../services/memberValueService";
 import type { XmlaManifest } from "../services/catalogService";
 import { debugLogger } from "../services/debugLogger";
 import * as interpreterAgent from "../agents/interpreterAgent";
 import * as mapperAgent from "../agents/mapperAgent";
 import * as responseAgent from "../agents/responseAgent";
-import type { ConversationTurn } from "../agents/types";
+import type { ConversationTurn, QueryIntent } from "../agents/types";
 import { normalizeJargon } from "../data/automotiveJargon";
+import { validateAndCorrectQueryPlan } from "../services/queryPlanValidator";
+import type { FilterMatchLevel } from "../services/filterConfidence";
+import {
+  levelFromSqlOrXmlaScore,
+  levelForUmbrellaExpansion,
+  levelForSingleContains,
+  levelForYearFallback,
+  shouldWarnUser
+} from "../services/filterConfidence";
+import {
+  RESPONSE_MAX_DIMENSION_COLUMNS,
+  RESPONSE_MAX_ROWS
+} from "../config/responseLimits";
 
 // Re-export for chatController (backward compat)
 export type { ConversationTurn };
@@ -29,6 +46,7 @@ type LlmSelection = CatalogMapping;
 type ResolvedMember = {
   value_caption: string;
   member_unique_name: string;
+  matchConfidence?: FilterMatchLevel;
 };
 
 /** All resolved members for one hierarchy dimension (may be multiple when user asks "Madrid y Valencia") */
@@ -55,6 +73,8 @@ type MeasureResult = {
   catalog: string;
   filter_combo: FilterTuple[];
   filter_label: string;
+  /** Fila de total global del contexto (mismo WHERE que el desglose, sin dimensión en ROWS) — alineado con visor "Total seleccionado". */
+  is_breakdown_total_row?: boolean;
 };
 
 export type ChartData = {
@@ -78,6 +98,12 @@ export type AskResponsePayload = {
     measure: string | null;
     mdx: string | null;
     results: MeasureResult[];
+    /** Total de filas devueltas por la consulta antes de limitar la respuesta */
+    results_total_count?: number;
+    /** true si results.length < results_total_count */
+    results_truncated?: boolean;
+    /** true si alguna fila tenía más dimensiones y se recortó filter_combo */
+    dimension_columns_truncated?: boolean;
     selection: Partial<CatalogMapping>;
   };
 };
@@ -144,6 +170,35 @@ function normalizeFilters(rawFilters: unknown[]): LlmFilter[] {
       };
     })
     .filter((f) => f.hierarchy_mdx && f.values.length > 0);
+}
+
+/**
+ * Si el usuario pide total mercado / matriculaciones "por fabricante" o "por marca" pero el
+ * intérprete no activa isBreakdown, fuerza desglose por dimensión Marca (fabricante = marca en OLAP).
+ */
+function applyFabricanteMarcaBreakdownHeuristic(
+  normalizedPrompt: string,
+  intent: QueryIntent
+): QueryIntent {
+  const q = normalize(normalizedPrompt);
+  const wantsListadoPorMarca =
+    q.includes("por fabricante") ||
+    q.includes("por cada fabricante") ||
+    q.includes("cada fabricante") ||
+    q.includes("por marca") ||
+    q.includes("total mercado por fabricante") ||
+    (q.includes("fabricante") && q.includes("por "));
+
+  if (!wantsListadoPorMarca) return intent;
+
+  return {
+    ...intent,
+    isBreakdown: true,
+    breakdownDimension: "marca",
+    isMetaQuestion: false,
+    preferredCube:
+      intent.preferredCube ?? (q.includes("matriculacion") ? "Matriculaciones" : undefined)
+  };
 }
 
 // -- Cube pre-filtering ------------------------------------------------------
@@ -439,6 +494,7 @@ async function buildCatalogContextWithHierarchies(
       "DIMENSIONES Y JERARQUÍAS — usa el valor de hierarchy_mdx EXACTO para los filtros; soporta múltiples valores:"
     );
 
+    const printedHierarchyKeys = new Set<string>();
     for (const d of dims) {
       // Match por equality (ideal) O por prefijo (fallback cuando dimension_unique_name
       // fue guardada igual a hierarchy_unique_name en el import, ej: "[-MT Producto].[Marca]"
@@ -453,15 +509,76 @@ async function buildCatalogContextWithHierarchies(
         lines.push(`  Dimensión ${d.mdxUniqueName} ("${d.friendlyName}"):`);
         for (const h of dimHierarchies) {
           lines.push(`    hierarchy_mdx: "${h.hierarchyUniqueName}"  caption: "${h.hierarchyCaption}"`);
+          printedHierarchyKeys.add(h.hierarchyUniqueName);
         }
       } else {
         lines.push(`  ${d.mdxUniqueName} ("${d.friendlyName}")`);
+      }
+    }
+
+    // Jerarquías en SSAS (SQL) que no mapearon a ningún miembro en olap_members: el mapper debe verlas igual.
+    const orphans = hierarchies.filter(
+      (h) => !printedHierarchyKeys.has(h.hierarchyUniqueName) && !shouldHideHierarchyInPrompt(h.hierarchyUniqueName)
+    );
+    if (orphans.length > 0) {
+      lines.push(
+        "  OTRAS JERARQUÍAS EN ESTE CUBO (no aparecen en la lista de dimensiones del manifiesto; copiar hierarchy_mdx tal cual):"
+      );
+      for (const h of orphans) {
+        lines.push(`    hierarchy_mdx: "${h.hierarchyUniqueName}"  caption: "${h.hierarchyCaption}"`);
       }
     }
     lines.push("");
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Jerarquías reales (dbo.olap_hierarchies) de los cubos más probables para la pregunta.
+ * El intérprete sigue sin ver MDX; solo captions y nombres de dimensión para alinear
+ * desglose semántico (marca/fabricante) con lo que existe en cada cubo.
+ */
+async function buildInterpreterHierarchyHints(
+  visibleCubes: ManifestCube[],
+  normalizedPrompt: string,
+  prevCubeName: string | null,
+  maxCubes = 3
+): Promise<string> {
+  if (visibleCubes.length === 0) return "";
+  const miniManifest: XmlaManifest = {
+    generatedAt: "",
+    endpoint: "",
+    cubes: visibleCubes
+  };
+  const candidates = prefilterCubes(miniManifest, normalizedPrompt, maxCubes, prevCubeName);
+  const lines: string[] = [
+    "=== DIMENSIONES Y DESGLOSES (cubos candidatos según la pregunta) ===",
+    "Las jerarquías listadas existen en SSAS para ese cubo. Usa breakdownDimension solo con valores semánticos:",
+    "año, mes, provincia, segmento, marca, canal (no escribas rutas MDX).",
+    "Fabricante y marca son el mismo concepto de negocio: si aquí aparece caption \"Fabricante\", breakdownDimension = \"marca\".",
+    "preferredCube debe ser uno de los nombres del bloque \"CUBOS DE DATOS ACCESIBLES\".",
+    ""
+  ];
+  let any = false;
+  for (const cube of candidates) {
+    let hierarchies: Awaited<ReturnType<typeof catalogService.getHierarchiesForCube>> = [];
+    try {
+      hierarchies = await catalogService.getHierarchiesForCube(cube.catalog, cube.xmlaCubeName);
+    } catch {
+      continue;
+    }
+    const filtered = hierarchies.filter((h) => !shouldHideHierarchyInPrompt(h.hierarchyUniqueName));
+    if (filtered.length === 0) continue;
+    any = true;
+    lines.push(`Cubo "${cube.catalog}" (id interno ${cube.cubeName}):`);
+    for (const h of filtered.slice(0, 45)) {
+      lines.push(`  - "${h.hierarchyCaption}"  [dimensión: ${h.dimensionUniqueName}]`);
+    }
+    lines.push("");
+  }
+  lines.push("===================================================");
+  return any ? lines.join("\n") : "";
 }
 
 
@@ -526,9 +643,10 @@ type FilterExpansion = {
 };
 
 type FilterResolutionResult = {
-  groups:     ResolvedFilterGroup[];
+  groups: ResolvedFilterGroup[];
   unresolved: Array<{ hierarchy_mdx: string; friendly_name: string; values: string[] }>;
-  expansions: FilterExpansion[];  // terms expanded to multiple members
+  expansions: FilterExpansion[];
+  lowConfidenceHints: responseAgent.LowConfidenceFilterHint[];
 };
 
 /**
@@ -541,122 +659,235 @@ async function resolveFilters(
   filters: LlmFilter[],
   traceId: string
 ): Promise<FilterResolutionResult> {
-  const groups:     ResolvedFilterGroup[] = [];
+  const groups: ResolvedFilterGroup[] = [];
   const unresolved: Array<{ hierarchy_mdx: string; friendly_name: string; values: string[] }> = [];
   const expansions: FilterExpansion[] = [];
+  const lowConfidenceHints: responseAgent.LowConfidenceFilterHint[] = [];
+
+  const pushLowConfidenceHint = (
+    friendly: string,
+    userValue: string,
+    resolvedAs: string,
+    level: FilterMatchLevel
+  ): void => {
+    if (!shouldWarnUser(level)) return;
+    lowConfidenceHints.push({
+      friendly_name: friendly,
+      user_value: userValue,
+      resolved_as: resolvedAs,
+      level
+    });
+  };
 
   for (const filter of filters ?? []) {
     if (!filter.hierarchy_mdx || !filter.values?.length) continue;
 
+    const friendlyLabel = filter.friendly_name || filter.hierarchy_mdx;
     const resolvedMembers: ResolvedMember[] = [];
     const unresolvedValues: string[] = [];
 
     for (const rawValue of filter.values) {
       if (!rawValue) continue;
       try {
-        // Strategy 0: local cached member values in SQL (faster + more deterministic)
-        const localBest = await memberValueService.resolveMember(
+        const localWithScore = await memberValueService.resolveMemberWithScore(
           cube.catalog,
           cube.xmlaCubeName,
           filter.hierarchy_mdx,
           rawValue
         );
 
-        if (localBest) {
-          resolvedMembers.push({ value_caption: localBest.caption, member_unique_name: localBest.uniqueName });
+        if (localWithScore) {
+          const level = levelFromSqlOrXmlaScore(localWithScore.score, localWithScore.score >= 20);
+          resolvedMembers.push({
+            value_caption: localWithScore.caption,
+            member_unique_name: localWithScore.uniqueName,
+            matchConfidence: level
+          });
+          pushLowConfidenceHint(friendlyLabel, rawValue, localWithScore.caption, level);
           await debugLogger.log("ask", "filter_resolved_local", {
             traceId,
             hierarchy: filter.hierarchy_mdx,
             value: rawValue,
-            resolved: localBest.uniqueName
+            resolved: localWithScore.uniqueName,
+            score: localWithScore.score,
+            confidence: level
           });
           continue;
         }
 
-        const best = await mdxBridgeService.findBestMemberByCaption(
+        const bestWithScore = await mdxBridgeService.findBestMemberByCaptionWithScore(
           cube.catalog,
           cube.xmlaCubeName,
           filter.hierarchy_mdx,
           rawValue
         );
 
-        // Determine if the match is exact (caption === rawValue, case-insensitive)
         const normRaw = rawValue.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-        const normBest = best?.caption.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-        const isExact = best !== null && normBest === normRaw;
+        const normBest = bestWithScore?.caption
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim();
+        const isExact = bestWithScore !== null && normBest === normRaw;
 
-        if (isExact) {
-          // Exact match — use this single member
-          resolvedMembers.push({ value_caption: best!.caption, member_unique_name: best!.uniqueName });
-          await debugLogger.log("ask", "filter_resolved_exact", {
-            traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, resolved: best!.uniqueName
+        if (isExact && bestWithScore) {
+          const level = levelFromSqlOrXmlaScore(bestWithScore.score, true);
+          resolvedMembers.push({
+            value_caption: bestWithScore.caption,
+            member_unique_name: bestWithScore.uniqueName,
+            matchConfidence: level
           });
-
+          pushLowConfidenceHint(friendlyLabel, rawValue, bestWithScore.caption, level);
+          await debugLogger.log("ask", "filter_resolved_exact", {
+            traceId,
+            hierarchy: filter.hierarchy_mdx,
+            value: rawValue,
+            resolved: bestWithScore.uniqueName,
+            score: bestWithScore.score,
+            confidence: level
+          });
         } else if (filter.type === "year") {
-          // Year filter — build unique name directly (SSAS year unique names are predictable)
           const fallback = `${filter.hierarchy_mdx}.&[${rawValue}]`;
-          resolvedMembers.push({ value_caption: rawValue, member_unique_name: fallback });
-          await debugLogger.log("ask", "year_filter_fallback", { traceId, hierarchy: filter.hierarchy_mdx, fallback });
-
+          const level = levelForYearFallback();
+          resolvedMembers.push({
+            value_caption: rawValue,
+            member_unique_name: fallback,
+            matchConfidence: level
+          });
+          await debugLogger.log("ask", "year_filter_fallback", {
+            traceId,
+            hierarchy: filter.hierarchy_mdx,
+            fallback,
+            confidence: level
+          });
         } else {
-          // Not exact — try multi-match strategies for umbrella terms (motos, SUV, etc.)
-
-          // Strategy 1: prefix match — "motos"->["Moto Carretera","Moto Campo","Moto Scooter"]
           const prefixMatches = await mdxBridgeService.findMembersWithPrefix(
-            cube.catalog, cube.xmlaCubeName, filter.hierarchy_mdx, rawValue
+            cube.catalog,
+            cube.xmlaCubeName,
+            filter.hierarchy_mdx,
+            rawValue
           );
 
           if (prefixMatches.length > 0) {
-            for (const m of prefixMatches) resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
-            await debugLogger.log("ask", "filter_prefix_match", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, matched: prefixMatches.map((m) => m.caption) });
-            console.log(`[resolveFilters] Prefix "${rawValue}" -> ${prefixMatches.map((m) => m.caption).join(", ")}`);
-            if (prefixMatches.length > 1) {
-              expansions.push({ original: rawValue, expanded: prefixMatches.map((m) => m.caption), friendly_name: filter.friendly_name || filter.hierarchy_mdx });
+            const level = levelForUmbrellaExpansion();
+            const resolvedAs = prefixMatches.map((m) => m.caption).join(", ");
+            for (const m of prefixMatches) {
+              resolvedMembers.push({
+                value_caption: m.caption,
+                member_unique_name: m.uniqueName,
+                matchConfidence: level
+              });
             }
-
+            pushLowConfidenceHint(friendlyLabel, rawValue, resolvedAs, level);
+            await debugLogger.log("ask", "filter_prefix_match", {
+              traceId,
+              hierarchy: filter.hierarchy_mdx,
+              value: rawValue,
+              matched: prefixMatches.map((m) => m.caption),
+              confidence: level
+            });
+            console.log(
+              `[resolveFilters] Prefix "${rawValue}" -> ${prefixMatches.map((m) => m.caption).join(", ")}`
+            );
+            if (prefixMatches.length > 1) {
+              expansions.push({
+                original: rawValue,
+                expanded: prefixMatches.map((m) => m.caption),
+                friendly_name: friendlyLabel
+              });
+            }
           } else {
-            // Strategy 2: contains match — "SUV" -> [ASUV, BSUV, CSUV, DSUV, ESUV, FSUV]
             const containsMatches = await mdxBridgeService.findMembersContaining(
-              cube.catalog, cube.xmlaCubeName, filter.hierarchy_mdx, rawValue
+              cube.catalog,
+              cube.xmlaCubeName,
+              filter.hierarchy_mdx,
+              rawValue
             );
 
             if (containsMatches.length >= 2) {
-              // Múltiples contains -> término paraguas (motos, SUV, etc.), incluir todos
-              for (const m of containsMatches) resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
-              await debugLogger.log("ask", "filter_contains_match", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, matched: containsMatches.map((m) => m.caption) });
-              console.log(`[resolveFilters] Contains "${rawValue}" -> ${containsMatches.map((m) => m.caption).join(", ")}`);
-              expansions.push({ original: rawValue, expanded: containsMatches.map((m) => m.caption), friendly_name: filter.friendly_name || filter.hierarchy_mdx });
-
+              const level = levelForUmbrellaExpansion();
+              const resolvedAs = containsMatches.map((m) => m.caption).join(", ");
+              for (const m of containsMatches) {
+                resolvedMembers.push({
+                  value_caption: m.caption,
+                  member_unique_name: m.uniqueName,
+                  matchConfidence: level
+                });
+              }
+              pushLowConfidenceHint(friendlyLabel, rawValue, resolvedAs, level);
+              await debugLogger.log("ask", "filter_contains_match", {
+                traceId,
+                hierarchy: filter.hierarchy_mdx,
+                value: rawValue,
+                matched: containsMatches.map((m) => m.caption),
+                confidence: level
+              });
+              console.log(
+                `[resolveFilters] Contains "${rawValue}" -> ${containsMatches.map((m) => m.caption).join(", ")}`
+              );
+              expansions.push({
+                original: rawValue,
+                expanded: containsMatches.map((m) => m.caption),
+                friendly_name: friendlyLabel
+              });
             } else if (containsMatches.length === 1) {
-              // Un solo contains match -> usarlo directamente (no es un término paraguas)
               const m = containsMatches[0];
-              resolvedMembers.push({ value_caption: m.caption, member_unique_name: m.uniqueName });
-              await debugLogger.log("ask", "filter_contains_single", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, resolved: m.uniqueName });
+              const level = levelForSingleContains();
+              resolvedMembers.push({
+                value_caption: m.caption,
+                member_unique_name: m.uniqueName,
+                matchConfidence: level
+              });
+              pushLowConfidenceHint(friendlyLabel, rawValue, m.caption, level);
+              await debugLogger.log("ask", "filter_contains_single", {
+                traceId,
+                hierarchy: filter.hierarchy_mdx,
+                value: rawValue,
+                resolved: m.uniqueName,
+                confidence: level
+              });
               console.log(`[resolveFilters] Contains(1) "${rawValue}" -> ${m.caption}`);
-
-            } else if (best) {
-              // Sin contains, pero findBestMemberByCaption encontró algo -> usar como best-effort
-              resolvedMembers.push({ value_caption: best.caption, member_unique_name: best.uniqueName });
-              await debugLogger.log("ask", "filter_resolved_partial", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, resolved: best.uniqueName });
-              console.log(`[resolveFilters] Partial "${rawValue}" -> ${best.caption}`);
-
+            } else if (bestWithScore) {
+              const level = levelFromSqlOrXmlaScore(bestWithScore.score, false);
+              resolvedMembers.push({
+                value_caption: bestWithScore.caption,
+                member_unique_name: bestWithScore.uniqueName,
+                matchConfidence: level
+              });
+              pushLowConfidenceHint(friendlyLabel, rawValue, bestWithScore.caption, level);
+              await debugLogger.log("ask", "filter_resolved_partial", {
+                traceId,
+                hierarchy: filter.hierarchy_mdx,
+                value: rawValue,
+                resolved: bestWithScore.uniqueName,
+                score: bestWithScore.score,
+                confidence: level
+              });
+              console.log(`[resolveFilters] Partial "${rawValue}" -> ${bestWithScore.caption}`);
             } else {
               unresolvedValues.push(rawValue);
-              await debugLogger.log("ask", "filter_not_found", { traceId, hierarchy: filter.hierarchy_mdx, value: rawValue });
+              await debugLogger.log("ask", "filter_not_found", {
+                traceId,
+                hierarchy: filter.hierarchy_mdx,
+                value: rawValue
+              });
             }
           }
         }
       } catch (err) {
         unresolvedValues.push(rawValue);
         await debugLogger.log("ask", "filter_resolve_error", {
-          traceId, hierarchy: filter.hierarchy_mdx, value: rawValue, error: (err as Error).message
+          traceId,
+          hierarchy: filter.hierarchy_mdx,
+          value: rawValue,
+          error: (err as Error).message
         });
       }
     }
 
     if (resolvedMembers.length > 0) {
       groups.push({
-        hierarchy_friendly: filter.friendly_name || filter.hierarchy_mdx,
+        hierarchy_friendly: friendlyLabel,
         hierarchy_mdx: filter.hierarchy_mdx,
         members: resolvedMembers
       });
@@ -671,7 +902,7 @@ async function resolveFilters(
     }
   }
 
-  return { groups, unresolved, expansions };
+  return { groups, unresolved, expansions, lowConfidenceHints };
 }
 
 // -- Filter combination generation --------------------------------------------
@@ -954,23 +1185,71 @@ function injectMultiYearFilter(
 // -- Computed aggregations & chart data builders -----------------------------
 
 /**
- * Computes numeric aggregations over MeasureResult values.
- * Only considers results that have a valid numeric value.
+ * Valor apto para sumar o gráficos: solo números puros (sin letras, unidades ni %).
  */
-function computeAggregations(results: MeasureResult[]): responseAgent.ComputedAggregations | null {
-  const numeric = results
-    .map((r) => (r.value !== null ? parseFloat(r.value) : NaN))
-    .filter((n) => !isNaN(n));
+function parseStrictNumeric(value: string | null): number | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === "") return null;
+  if (/[a-zA-ZÀ-ÿ]/.test(s)) return null;
+  if (/%/.test(s)) return null;
+  const cleaned = s.replace(/\s/g, "");
+  if (!/^[-+]?[\d.,]+$/.test(cleaned)) return null;
+  let normalized = cleaned;
+  if (cleaned.includes(",") && cleaned.includes(".")) {
+    normalized = cleaned.replace(/\./g, "").replace(",", ".");
+  } else if (cleaned.includes(",")) {
+    normalized = cleaned.replace(",", ".");
+  }
+  const n = parseFloat(normalized);
+  return Number.isFinite(n) ? n : null;
+}
 
-  if (numeric.length === 0) return null;
+function isStrictNumericMeasureValue(value: string | null): boolean {
+  return parseStrictNumeric(value) !== null;
+}
 
-  const label = results[0]?.friendly_name ?? "Valor";
-  const sum = numeric.reduce((a, b) => a + b, 0);
-  const avg = sum / numeric.length;
-  const max = Math.max(...numeric);
-  const min = Math.min(...numeric);
+/** Suma / promedio solo si el usuario lo pide explícitamente. */
+function userRequestedNumericAggregation(question: string): boolean {
+  const n = normalize(question);
+  // "total mercado" suele ser el nombre de la métrica; "por X" indica desglose, no sumar filas.
+  if (/\btotal\s+mercado\b/.test(n) && /\b(por|desglose|listado|cada|separad)\b/.test(n)) {
+    return false;
+  }
+  return (
+    /\b(total|suma|sumar|sumatorio|sumarizar|sumado|agregar|promedio|media|acumulado|totalizar)\b/.test(n) ||
+    /\bel\s+total\b/.test(n) ||
+    /\ben\s+total\b/.test(n) ||
+    /\bsuma\s+de\b/.test(n) ||
+    /\btotal\s+(de|del|de la|de los|de las)\b/.test(n)
+  );
+}
 
-  return { sum, avg, max, min, count: numeric.length, label };
+/**
+ * Agregados solo con petición explícita y si TODAS las filas son numéricas puras.
+ */
+function computeAggregations(
+  results: MeasureResult[],
+  question: string
+): responseAgent.ComputedAggregations | null {
+  if (!userRequestedNumericAggregation(question)) return null;
+  const detail = results.filter((r) => !r.is_breakdown_total_row);
+  if (detail.length === 0) return null;
+
+  const nums: number[] = [];
+  for (const r of detail) {
+    const n = parseStrictNumeric(r.value);
+    if (n === null) return null;
+    nums.push(n);
+  }
+
+  const label = detail[0]?.friendly_name ?? "Valor";
+  const sum = nums.reduce((a, b) => a + b, 0);
+  const avg = sum / nums.length;
+  const max = Math.max(...nums);
+  const min = Math.min(...nums);
+
+  return { sum, avg, max, min, count: nums.length, label };
 }
 
 /**
@@ -979,16 +1258,17 @@ function computeAggregations(results: MeasureResult[]): responseAgent.ComputedAg
  * or when the results are a single scalar value.
  */
 function buildChartData(results: MeasureResult[]): ChartData | null {
-  if (results.length < 2) return null;
+  const forChart = results.filter((r) => !r.is_breakdown_total_row);
+  if (forChart.length < 2) return null;
 
   // Detect if results have dimension breakdown (different dimension values)
-  const hasDimensions = results.some((r) => Object.keys(r.filter_combo).length > 0 || r.filter_label !== "sin filtros");
+  const hasDimensions = forChart.some((r) => Object.keys(r.filter_combo).length > 0 || r.filter_label !== "sin filtros");
 
   if (!hasDimensions) return null;
 
   // Group by measure name
   const byMeasure = new Map<string, MeasureResult[]>();
-  for (const r of results) {
+  for (const r of forChart) {
     const key = r.friendly_name;
     if (!byMeasure.has(key)) byMeasure.set(key, []);
     byMeasure.get(key)!.push(r);
@@ -1003,9 +1283,13 @@ function buildChartData(results: MeasureResult[]): ChartData | null {
 
   if (labels.length < 2) return null;
 
-  const datasets = [...byMeasure.entries()].map(([measureName, rows]) => ({
+  for (const r of forChart) {
+    if (!isStrictNumericMeasureValue(r.value)) return null;
+  }
+
+  const datasets = [...byMeasure.entries()].map(([measureName, mRows]) => ({
     label: measureName,
-    data: rows.map((r) => (r.value !== null ? parseFloat(r.value) : 0))
+    data: mRows.map((r) => parseStrictNumeric(r.value) ?? 0)
   }));
 
   // Choose chart type heuristically
@@ -1017,39 +1301,101 @@ function buildChartData(results: MeasureResult[]): ChartData | null {
 
 // -- Breakdown MDX execution -------------------------------------------------
 
-/**
- * Mapeo semántico: concepto del usuario -> jerarquía MDX candidata.
- * Solo se usa para DESCUBRIR la jerarquía si el mapper no la especifica.
- */
-const BREAKDOWN_DIMENSION_HINTS: Record<string, string[]> = {
-  año:        ["[Fecha].[Año]",       "[Date].[Year]",        "[Periodo].[Año]"],
-  mes:        ["[Fecha].[Mes]",       "[Date].[Month]",       "[Fecha].[Año - Mes]"],
-  provincia:  ["[-MT Territorios].[Provincia]", "[Territorio].[Provincia]", "[Provincia].[Provincia]"],
-  region:     ["[-MT Territorios].[Comunidad Autónoma]", "[Territorio].[Región]", "[Comunidad Autónoma].[Comunidad Autónoma]"],
-  segmento:   ["[Producto].[Segmento]", "[Clasificación RGV].[Segmento]", "[Segmento].[Segmento]"],
-  marca:      ["[Producto].[Marca]",  "[Marca].[Marca]",      "[-MT Producto].[Marca]"],
-  canal:      ["[Canales].[Canal]",   "[Canal].[Canal]"],
-};
-
-/**
- * Extrae el valor de un miembro de dimensión de una fila de respuesta MDX tabular.
- * Las columnas de dimensión tienen nombres como "[Fecha].[Año].[Año]" o "Fecha_x002E_Año".
- */
-function extractDimensionLabel(row: Record<string, unknown>): string | null {
-  const keys = Object.keys(row);
-  // Las columnas de medida tienen formato [Measures]... — las saltamos
-  const dimKey = keys.find((k) => {
-    const lower = k.toLowerCase();
-    return !lower.includes("measures") && !lower.includes("_x005b_measures");
-  });
-  if (!dimKey) return null;
-  const val = row[dimKey];
+/** Igual que visores XMLA (p. ej. RedRadix): priorizar Value numérico del cell, luego _. */
+function extractXmlaCellScalar(val: unknown): string | null {
+  if (val === null || val === undefined) return null;
   if (typeof val === "string" || typeof val === "number") return String(val);
   if (val && typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    return obj._ ? String(obj._) : null;
+    const o = val as Record<string, unknown>;
+    if (o.Value !== undefined && o.Value !== null) return String(o.Value);
+    if (o._ !== undefined && o._ !== null) return String(o._);
   }
   return null;
+}
+
+function extractCellString(val: unknown): string | null {
+  return extractXmlaCellScalar(val);
+}
+
+function isMeasureColumnKey(k: string): boolean {
+  const l = k.toLowerCase();
+  return l.includes("measures") || l.includes("_x005b_measures");
+}
+
+/**
+ * Resuelve la columna del resultado tabular que corresponde a la medida pedida.
+ * Nunca usar la última columna como fallback: puede ser otra dimensión (valores tipo texto).
+ */
+function findMeasureColumnKey(keys: string[], measureMdxUniqueName: string): string | null {
+  const measureKeys = keys.filter(isMeasureColumnKey);
+  if (measureKeys.length === 0) return null;
+  if (measureKeys.length === 1) return measureKeys[0]!;
+
+  const inner = measureMdxUniqueName.match(/\[Measures\]\.\[([^\]]+)\]/i)?.[1]?.trim() ?? "";
+  const innerNorm = normalize(inner).replace(/\s/g, "");
+
+  let best: { k: string; score: number } | null = null;
+  for (const k of measureKeys) {
+    const kn = normalize(k);
+    let score = 0;
+    if (inner && kn.includes(innerNorm)) score += 50;
+    if (inner && k.includes(inner)) score += 30;
+    score += kn.includes("measures") ? 1 : 0;
+    if (!best || score > best.score) best = { k, score };
+  }
+  return best && best.score > 0 ? best.k : measureKeys[0]!;
+}
+
+/** Profundidad de nivel en el nombre de columna XMLA (más segmentos = más cerca del miembro hoja). */
+function hierarchyColumnDepth(k: string): number {
+  return (k.match(/\]\.\[/g) ?? []).length;
+}
+
+/**
+ * Extrae el caption del miembro de la jerarquía de desglose (ROWS).
+ * Con varias columnas de dimensión, el visor suele mostrar el nivel hoja; priorizamos la columna
+ * más anidada que coincida con la jerarquía y evitamos captions que parecen fecha u otro atributo.
+ */
+function extractDimensionLabelForBreakdown(
+  row: Record<string, unknown>,
+  breakdownHierarchy: string
+): string | null {
+  const dimKeys = Object.keys(row).filter((k) => !isMeasureColumnKey(k));
+  // SSAS a veces no proyecta columnas de dimensión para el miembro "Blank"/Unknown: solo llega la medida.
+  if (dimKeys.length === 0) return "(Blank)";
+  if (dimKeys.length === 1) {
+    const s = extractCellString(row[dimKeys[0]!]);
+    if (s === null || String(s).trim() === "") return "(Blank)";
+    return s;
+  }
+
+  const hierParts = breakdownHierarchy
+    .split("].[")
+    .map((s) => s.replace(/[\[\]]/g, "").trim())
+    .filter((p) => p.length > 0);
+  const hierNorm = hierParts.map((p) => normalize(p));
+
+  const matching = dimKeys.filter((k) => {
+    const kn = normalize(k);
+    return hierNorm.some((p) => p.length >= 2 && kn.includes(p));
+  });
+  const candidates = matching.length > 0 ? matching : dimKeys;
+
+  const looksLikeDateCaption = (s: string) =>
+    /^\d{1,2}\/\d{1,2}\/\d{4}/.test(s.trim()) || /^\d{4}-\d{2}-\d{2}/.test(s.trim());
+
+  const sorted = [...candidates].sort(
+    (a, b) => hierarchyColumnDepth(b) - hierarchyColumnDepth(a) || b.length - a.length
+  );
+
+  for (const k of sorted) {
+    const label = extractCellString(row[k]);
+    if (!label) continue;
+    if (looksLikeDateCaption(label)) continue;
+    return label;
+  }
+
+  return extractCellString(row[sorted[0]!]);
 }
 
 /**
@@ -1058,13 +1404,27 @@ function extractDimensionLabel(row: Record<string, unknown>): string | null {
  * Si se pasan specificRowMembers, usa solo esos miembros en ON ROWS en lugar de .Members.
  * Parsea todas las filas y devuelve un MeasureResult por fila.
  */
+function escapeMdxAmpersandMemberCaption(caption: string): string {
+  return caption.replace(/\]/g, "]]");
+}
+
+/** Limpia captions XMLA (tab/nbsp) para alinear con visor. */
+function normalizeBreakdownDimensionLabel(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).replace(/\u00a0/g, " ").replace(/^[\s\t]+|[\s\t]+$/g, "");
+  return s.length ? s : null;
+}
+
 async function executeBreakdownQuery(
   cube: ManifestCube,
   measure: LlmSelection["measures"][number],
   breakdownHierarchy: string,
   extraFilters: FilterTuple[],
   traceId: string,
-  specificRowMembers?: FilterTuple[]
+  specificRowMembers?: FilterTuple[],
+  /** Alineado con visor SSAS: { [Dim].[Hier].[Nivel].Members }; si no, .Members sobre jerarquía */
+  rowsAxisMdxSet?: string,
+  leafMemberPathPrefix?: string
 ): Promise<MeasureResult[]> {
   const whereClause = extraFilters.length > 0
     ? ` WHERE ( ${extraFilters.map((t) => t.member_unique_name).join(", ")} )`
@@ -1074,9 +1434,16 @@ async function executeBreakdownQuery(
   // los usamos directamente en ON ROWS en vez de traer todos con .Members
   const rowsSet = specificRowMembers && specificRowMembers.length > 0
     ? `{ ${specificRowMembers.map((m) => m.member_unique_name).join(", ")} }`
-    : `{ ${breakdownHierarchy}.Members }`;
+    : rowsAxisMdxSet ?? `{ ${breakdownHierarchy}.Members }`;
 
-  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS, ${rowsSet} ON ROWS FROM [${cube.xmlaCubeName}]${whereClause}`;
+  // NON EMPTY vía NonEmpty(set, measure). ORDER BDESC: mayor medida primero (evita que el límite de
+  // filas oculte buckets grandes como Blank cuando el servidor devuelve orden arbitrario).
+  const rowsOnAxis =
+    specificRowMembers && specificRowMembers.length > 0
+      ? `NON EMPTY ${rowsSet}`
+      : `ORDER( NONEMPTY( ${rowsSet}, { ${measure.mdx_unique_name} } ), (${measure.mdx_unique_name}), BDESC )`;
+
+  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS, ${rowsOnAxis} ON ROWS FROM [${cube.xmlaCubeName}]${whereClause}`;
 
   pLog("  [BREAKDOWN]", BLUE, "MDX desglose", mdx.replace(/\s+/g, " ").slice(0, 200));
 
@@ -1098,17 +1465,17 @@ async function executeBreakdownQuery(
     const results: MeasureResult[] = rows
       .map((rawRow) => {
         const row = rawRow as Record<string, unknown>;
-        const dimLabel = extractDimensionLabel(row) ?? "?";
+        const dimLabel =
+          normalizeBreakdownDimensionLabel(extractDimensionLabelForBreakdown(row, breakdownHierarchy)) ??
+          "?";
         const keys = Object.keys(row);
-        const measureKey = keys.find((k) => k.toLowerCase().includes("measures") || k.toLowerCase().includes("_x005b_measures")) ?? keys[keys.length - 1];
-        const rawVal = row[measureKey ?? ""];
-        let value: string | null = null;
-        if (typeof rawVal === "string" || typeof rawVal === "number") {
-          value = parseSsasNumber(String(rawVal));
-        } else if (rawVal && typeof rawVal === "object") {
-          const obj = rawVal as Record<string, unknown>;
-          value = parseSsasNumber(obj._ ? String(obj._) : null);
-        }
+        const measureKey = findMeasureColumnKey(keys, measure.mdx_unique_name);
+        const rawVal = measureKey ? row[measureKey] : undefined;
+        const cellStr = extractXmlaCellScalar(rawVal);
+        const value = cellStr !== null ? parseSsasNumber(cellStr) : null;
+
+        const memberPathBase = leafMemberPathPrefix ?? breakdownHierarchy;
+        const memberEsc = escapeMdxAmpersandMemberCaption(dimLabel);
 
         return {
           technical_name: measure.technical_name,
@@ -1123,16 +1490,21 @@ async function executeBreakdownQuery(
               dimension_friendly: dimFriendly,
               dimension_mdx: breakdownHierarchy,
               value_caption: dimLabel,
-              member_unique_name: `${breakdownHierarchy}.&[${dimLabel}]`
+              member_unique_name: `${memberPathBase}.&[${memberEsc}]`
             }
           ],
           filter_label: dimLabel
         };
       })
-      // Filtrar filas "All" (miembros raíz/agregados que no son valores reales)
+      // Solo excluir agregados "All" / total general; el valor debe ser el del cubo (no filtrar por “no numérico”).
       .filter((r) => {
         const label = r.filter_label.toLowerCase();
-        return label !== "" && label !== "?" && !label.startsWith("all") && !label.includes("total general");
+        return (
+          label !== "" &&
+          label !== "?" &&
+          !label.startsWith("all") &&
+          !label.includes("total general")
+        );
       });
 
     await debugLogger.log("ask", "breakdown_mdx_success", {
@@ -1151,50 +1523,110 @@ async function executeBreakdownQuery(
   }
 }
 
+/** Placeholder en filter_combo para la fila de total (no es un miembro drillable). */
+const BREAKDOWN_TOTAL_MEMBER_PLACEHOLDER = "(aggregate)";
+
 /**
- * Resuelve el hierarchy MDX a usar para el desglose.
- * Intenta las jerarquías candidatas hasta encontrar una válida en el cubo.
+ * Total del mismo contexto que el visor (includeTotals): misma medida y misma cláusula WHERE
+ * que el desglose, sin dimensión en ROWS = agregado global del cubo con esos filtros.
  */
-function resolveBreakdownHierarchy(
-  breakdownDimension: string,
-  cube: ManifestCube
-): string | null {
-  const dimLower = breakdownDimension.toLowerCase();
+async function executeBreakdownGrandTotal(
+  cube: ManifestCube,
+  measure: LlmSelection["measures"][number],
+  extraFilters: FilterTuple[],
+  traceId: string,
+  breakdownHierarchy: string,
+  dimFriendly: string
+): Promise<MeasureResult | null> {
+  const whereClause = extraFilters.length > 0
+    ? ` WHERE ( ${extraFilters.map((t) => t.member_unique_name).join(", ")} )`
+    : "";
+  const mdx = `SELECT { ${measure.mdx_unique_name} } ON COLUMNS FROM [${cube.xmlaCubeName}]${whereClause}`;
 
-  // Buscar en los hints semánticos
-  for (const [key, candidates] of Object.entries(BREAKDOWN_DIMENSION_HINTS)) {
-    if (dimLower.includes(key) || key.includes(dimLower)) {
-      // Verificar cuál existe en el cubo (por nombre parcial)
-      for (const candidate of candidates) {
-        const candidateNorm = normalize(candidate);
-        const found = cube.members.find(
-          (m) =>
-            m.type === "dimension" &&
-            (normalize(m.mdxUniqueName).includes(candidateNorm) ||
-              candidateNorm.includes(normalize(m.mdxUniqueName)))
-        );
-        if (found) return candidate;
-        // Si el cubo tiene la jerarquía con ese nombre base, usarla directamente
-        const partial = cube.members.find(
-          (m) =>
-            m.type === "dimension" &&
-            normalize(m.mdxUniqueName).includes(normalize(candidate.split(".")[0] ?? ""))
-        );
-        if (partial) return candidate;
-      }
-      // Si no se encontró en el cubo, usar el primer candidato de todos modos
-      return candidates[0] ?? null;
-    }
+  pLog("  [BREAKDOWN]", BLUE, "MDX total contexto", mdx.replace(/\s+/g, " ").slice(0, 200));
+  await debugLogger.log("ask", "breakdown_total_mdx_attempt", { traceId, measure: measure.friendly_name, mdx });
+
+  try {
+    const result = await mdxBridgeService.executeMdx(mdx, cube.catalog);
+    const rows = (result.rows as unknown[]) ?? [];
+    const value = parseSsasNumber(extractScalarValue(rows));
+    if (value === null) return null;
+
+    return {
+      technical_name: measure.technical_name,
+      friendly_name: measure.friendly_name,
+      cube_name: cube.cubeName,
+      mdx,
+      value,
+      catalog: cube.catalog,
+      filter_combo: [
+        ...extraFilters,
+        {
+          dimension_friendly: dimFriendly,
+          dimension_mdx: breakdownHierarchy,
+          value_caption: "Total seleccionado",
+          member_unique_name: BREAKDOWN_TOTAL_MEMBER_PLACEHOLDER
+        }
+      ],
+      filter_label: "Total seleccionado",
+      is_breakdown_total_row: true
+    };
+  } catch (err) {
+    pLog("  [X]", RED, `MDX total desglose ERROR`, (err as Error).message.slice(0, 120));
+    await debugLogger.log("ask", "breakdown_total_mdx_error", {
+      traceId,
+      measure: measure.friendly_name,
+      error: (err as Error).message
+    });
+    return null;
   }
-
-  // Fallback: buscar en los miembros del cubo por texto
-  const dimMember = cube.members.find(
-    (m) => m.type === "dimension" && normalize(m.friendlyName).includes(dimLower)
-  );
-  return dimMember?.mdxUniqueName ?? null;
 }
 
 // -- Response Generation (delegated to responseAgent) ------------------------
+
+function truncateMeasureResultsForResponse(
+  results: MeasureResult[],
+  maxRows: number,
+  maxDimCols: number
+): {
+  display: MeasureResult[];
+  totalRows: number;
+  truncatedRows: boolean;
+  truncatedCols: boolean;
+} {
+  const detailOnly = results.filter((r) => !r.is_breakdown_total_row);
+  const totalRows = detailOnly.length;
+  const truncatedRows = totalRows > maxRows;
+
+  let detailCount = 0;
+  let truncatedCols = false;
+  const display: MeasureResult[] = [];
+  /** Hubo al menos una fila de detalle desde el último total (por medida en desglose). */
+  let hadDetailInCurrentBlock = false;
+
+  for (const r of results) {
+    if (r.is_breakdown_total_row) {
+      if (hadDetailInCurrentBlock) {
+        display.push(r);
+      }
+      hadDetailInCurrentBlock = false;
+      continue;
+    }
+    if (detailCount >= maxRows) {
+      continue;
+    }
+    let row = r;
+    if (r.filter_combo.length > maxDimCols) {
+      truncatedCols = true;
+      row = { ...r, filter_combo: r.filter_combo.slice(0, maxDimCols) };
+    }
+    display.push(row);
+    detailCount++;
+    hadDetailInCurrentBlock = true;
+  }
+
+  return { display, totalRows, truncatedRows, truncatedCols };
+}
 
 async function generateNaturalResponse(
   question: string,
@@ -1203,7 +1635,9 @@ async function generateNaturalResponse(
   unresolvedFilters: Array<{ hierarchy_mdx: string; friendly_name: string; values: string[] }>,
   filterExpansions: FilterExpansion[] = [],
   traceId = "unknown",
-  computed: responseAgent.ComputedAggregations | null = null
+  computed: responseAgent.ComputedAggregations | null = null,
+  lowConfidenceFilterHints: responseAgent.LowConfidenceFilterHint[] = [],
+  truncation: responseAgent.ResponseTruncation | null = null
 ): Promise<{ answer: string; answer_html: string | null }> {
   const ssasResults: responseAgent.SsasResult[] = results.map((r) => ({
     measure_name: r.friendly_name,
@@ -1211,10 +1645,12 @@ async function generateNaturalResponse(
     dimensions: r.filter_combo.reduce(
       (acc, t) => ({ ...acc, [t.dimension_friendly]: t.value_caption }),
       {} as Record<string, string>
-    )
+    ),
+    is_breakdown_total_row: r.is_breakdown_total_row
   }));
 
   const appliedFilters: responseAgent.AppliedFilter[] = results
+    .filter((r) => !r.is_breakdown_total_row)
     .flatMap((r) => r.filter_combo)
     .reduce((acc: responseAgent.AppliedFilter[], t) => {
       const existing = acc.find((a) => a.friendly_name === t.dimension_friendly);
@@ -1240,7 +1676,9 @@ async function generateNaturalResponse(
       expanded: e.expanded,
       friendly_name: e.friendly_name
     })),
-    computed
+    lowConfidenceFilterHints: lowConfidenceFilterHints.length > 0 ? lowConfidenceFilterHints : undefined,
+    computed,
+    truncation: truncation ?? undefined
   };
 
   await debugLogger.log("ask", "worker_agent_call", {
@@ -1249,6 +1687,7 @@ async function generateNaturalResponse(
     results_count: ssasResults.length,
     applied_filters: appliedFilters.map((f) => `${f.friendly_name}=${f.values.join(",")}`),
     unresolved_count: unresolvedFilters.length,
+    low_confidence_filter_hints: lowConfidenceFilterHints.length,
     computed_sum: computed?.sum ?? null
   });
 
@@ -1378,7 +1817,22 @@ export async function runAskPipeline(
   // Pasar los nombres de los cubos visibles para que el intérprete use preferredCube
   // solo con cubos a los que este usuario tiene acceso real.
   const visibleCubeNames = visibleCubes.map((c) => c.catalog);
-  const intent = await interpreterAgent.analyze(normalizedPrompt, sanitizedHistory, visibleCubeNames);
+  const interpreterHierarchyHints = await buildInterpreterHierarchyHints(
+    visibleCubes,
+    normalizedPrompt,
+    prevCubeName,
+    3
+  );
+  if (interpreterHierarchyHints) {
+    pLog("[INTENT]", DIM, "Pistas de jerarquías (candidatos)", `${interpreterHierarchyHints.split("\n").length} líneas`);
+  }
+  let intent = await interpreterAgent.analyze(
+    normalizedPrompt,
+    sanitizedHistory,
+    visibleCubeNames,
+    interpreterHierarchyHints
+  );
+  intent = applyFabricanteMarcaBreakdownHeuristic(normalizedPrompt, intent);
   await debugLogger.log("ask", "intent_extracted", { traceId, intent });
 
   // Use intent to detect meta-questions (more reliable than raw keyword matching)
@@ -1664,8 +2118,33 @@ export async function runAskPipeline(
   }
   // -----------------------------------------------------------------------------
 
+  // -- Validación determinística del plan (cubo/medidas vs. intención genérica) --
+  let planValidation = validateAndCorrectQueryPlan({
+    selection,
+    intent,
+    visibleCubes,
+    recommendedCubeName
+  });
+  selection = planValidation.selection;
+  if (planValidation.cubeCorrected) {
+    pLog("[PLAN]", MAGENTA, "Plan corregido (gating)",
+      planValidation.corrections.join(" ") || `${planValidation.fromCubeName} -> ${planValidation.toCubeName}`);
+    await debugLogger.log("ask", "query_plan_corrected", {
+      traceId,
+      fromCube: planValidation.fromCubeName,
+      toCube: planValidation.toCubeName,
+      correctionReason: planValidation.correctionReason,
+      corrections: planValidation.corrections
+    });
+  }
+  // ------------------------------------------------------------------------------
+
   await debugLogger.log("ask", "llm_selection", { traceId, selection });
-  pLog("[OK]", GREEN, "Mapeador seleccionó cubo", `"${selection.cube_name}"`);
+  if (planValidation.cubeCorrected) {
+    pLog("[OK]", GREEN, "Cubo aplicado (tras validación)", `"${selection.cube_name}"`);
+  } else {
+    pLog("[OK]", GREEN, "Mapeador seleccionó cubo", `"${selection.cube_name}"`);
+  }
   for (const m of selection.measures) {
     pLog("  [MEASURE]", GREEN, `Medida`, `${m.mdx_unique_name}  (${m.friendly_name})`);
   }
@@ -1780,9 +2259,18 @@ export async function runAskPipeline(
   injectMultiYearFilter(selection, intent);
 
   // -- Step 7: Resolve filter members via XMLA DISCOVER (multi-value aware) --
-  const { groups: resolvedFilterGroups, unresolved: unresolvedFilters, expansions: filterExpansions } =
-    await resolveFilters(selectedCube, selection.filters, traceId);
-  await debugLogger.log("ask", "resolved_filters", { traceId, groups: resolvedFilterGroups, unresolved: unresolvedFilters });
+  const {
+    groups: resolvedFilterGroups,
+    unresolved: unresolvedFilters,
+    expansions: filterExpansions,
+    lowConfidenceHints: filterLowConfidenceHints
+  } = await resolveFilters(selectedCube, selection.filters, traceId);
+  await debugLogger.log("ask", "resolved_filters", {
+    traceId,
+    groups: resolvedFilterGroups,
+    unresolved: unresolvedFilters,
+    low_confidence_hints: filterLowConfidenceHints.length
+  });
   pLog("[LINK]", BLUE, "Filtros resueltos en SSAS");
   for (const g of resolvedFilterGroups) {
     const members = g.members.map((m) => `${m.value_caption} -> ${m.member_unique_name}`).join(" | ");
@@ -1793,21 +2281,39 @@ export async function runAskPipeline(
       pLog("  [X]", RED, `NO ENCONTRADO: ${u.friendly_name}`, u.values.join(", "));
     }
   }
+  if (filterLowConfidenceHints.length > 0) {
+    for (const h of filterLowConfidenceHints) {
+      pLog("  [~]", YELLOW, `Confianza ${h.level}: ${h.friendly_name}`, `"${h.user_value}" → "${h.resolved_as}"`);
+    }
+  }
 
   // -- Step 8: Execute MDX (scalar o desglose según intención) ---------------
   const isBreakdown = Boolean(intent.isBreakdown) && Boolean(intent.breakdownDimension);
   const allResults: MeasureResult[] = [];
 
   if (isBreakdown && intent.breakdownDimension) {
-    // -- DESGLOSE: MDX con dimensión en ROWS -----------------------------------
-    const breakdownHierarchy = resolveBreakdownHierarchy(intent.breakdownDimension, selectedCube);
+    // -- DESGLOSE: MDX con dimensión en ROWS (jerarquía desde dbo.olap_hierarchies del cubo) --
+    const breakdownResolved = await resolveBreakdownHierarchySemantic(
+      intent.breakdownDimension,
+      selectedCube
+    );
+    const breakdownHierarchy = breakdownResolved?.hierarchyUniqueName ?? null;
 
     if (!breakdownHierarchy) {
       pLog("[WARN]", YELLOW, "Desglose: no se encontró jerarquía", `para "${intent.breakdownDimension}" — usando escalar`);
     } else {
-      pLog("[BREAKDOWN]", CYAN, `Desglose por "${intent.breakdownDimension}"`, `jerarquía: ${breakdownHierarchy}`);
+      pLog(
+        "[BREAKDOWN]",
+        CYAN,
+        `Desglose por "${intent.breakdownDimension}"`,
+        `jerarquía: ${breakdownHierarchy} (${breakdownResolved?.source ?? "?"} score=${breakdownResolved?.score ?? "?"})`
+      );
       await debugLogger.log("ask", "breakdown_mode", {
-        traceId, dimension: intent.breakdownDimension, hierarchy: breakdownHierarchy
+        traceId,
+        dimension: intent.breakdownDimension,
+        hierarchy: breakdownHierarchy,
+        resolution_source: breakdownResolved?.source,
+        resolution_score: breakdownResolved?.score
       });
 
       // Jerarquía raíz del desglose (ej: "[Fecha]" para "[Fecha].[Año]")
@@ -1834,12 +2340,28 @@ export async function runAskPipeline(
           member_unique_name: m.member_unique_name
         })));
 
+      const dimFriendly =
+        breakdownHierarchy.split(".").pop()?.replace(/[\[\]]/g, "") ?? "Dimensión";
+
       for (const measure of validatedMeasures) {
         const rows = await executeBreakdownQuery(
           selectedCube, measure, breakdownHierarchy, extraFilters, traceId,
-          specificRowMembers.length > 0 ? specificRowMembers : undefined
+          specificRowMembers.length > 0 ? specificRowMembers : undefined,
+          breakdownResolved?.rowsAxisMdxSet,
+          breakdownResolved?.leafMemberPathPrefix
         );
         allResults.push(...rows);
+        if (rows.length > 0) {
+          const totalRow = await executeBreakdownGrandTotal(
+            selectedCube,
+            measure,
+            extraFilters,
+            traceId,
+            breakdownHierarchy,
+            dimFriendly
+          );
+          if (totalRow) allResults.push(totalRow);
+        }
       }
     }
   }
@@ -1875,9 +2397,41 @@ export async function runAskPipeline(
     );
   }
 
+  const {
+    display: displayResults,
+    totalRows: resultsTotalCount,
+    truncatedRows,
+    truncatedCols
+  } = truncateMeasureResultsForResponse(
+    allResults,
+    RESPONSE_MAX_ROWS,
+    RESPONSE_MAX_DIMENSION_COLUMNS
+  );
+
+  const shownDetailRows = displayResults.filter((r) => !r.is_breakdown_total_row).length;
+
+  const responseTruncation: responseAgent.ResponseTruncation | null =
+    truncatedRows || truncatedCols
+      ? {
+          totalRowCount: resultsTotalCount,
+          shownRows: shownDetailRows,
+          truncatedRows,
+          truncatedColumns: truncatedCols
+        }
+      : null;
+
+  if (truncatedRows || truncatedCols) {
+    pLog(
+      "[LIMIT]",
+      YELLOW,
+      "Respuesta acotada",
+      `filas detalle ${shownDetailRows}/${resultsTotalCount}${truncatedCols ? "; dimensiones por fila recortadas" : ""}`
+    );
+  }
+
   // -- Step 9: Compute aggregations + chart data (pure Node.js, no LLM) -------
-  const computed = computeAggregations(allResults);
-  const chart_data = buildChartData(allResults);
+  const computed = computeAggregations(displayResults, prompt);
+  const chart_data = buildChartData(displayResults);
 
   if (computed) {
     pLog("[CALC]", CYAN, "Agregados calculados",
@@ -1887,15 +2441,23 @@ export async function runAskPipeline(
   // -- Step 10: Agent 3 — Response: format final answer ----------------------
   pLog("[WRITE] ", MAGENTA, "Agent 3 (Formateador): generando respuesta natural...");
   const { answer, answer_html } = await generateNaturalResponse(
-    prompt, allResults, selection, unresolvedFilters, filterExpansions, traceId, computed
+    prompt,
+    displayResults,
+    selection,
+    unresolvedFilters,
+    filterExpansions,
+    traceId,
+    computed,
+    filterLowConfidenceHints,
+    responseTruncation
   );
-  const primary = allResults[0];
+  const primary = displayResults[0];
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   pLog("[INFO]", GREEN, "RESPUESTA FINAL", `\n${answer}`);
   if (answer_html) pLog("[HTML]", CYAN, "HTML generado", `${answer_html.length} chars`);
   if (chart_data) pLog("[CHART]", CYAN, "Chart data", `type=${chart_data.type} labels=${chart_data.labels.length}`);
-  pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${allResults.length} resultado(s)`);
+  pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${displayResults.length} resultado(s) en payload (${resultsTotalCount} en consulta)`);
   console.log(`${CYAN}${"-".repeat(70)}${RESET}\n`);
 
   await debugLogger.log("ask", "pipeline_success", {
@@ -1906,7 +2468,18 @@ export async function runAskPipeline(
     has_html: answer_html !== null,
     has_chart: chart_data !== null,
     computed,
-    results: allResults.map((r) => ({ measure: r.friendly_name, value: r.value, label: r.filter_label }))
+    results_total_count: resultsTotalCount,
+    results_in_payload: displayResults.length,
+    results_truncated: truncatedRows,
+    dimension_columns_truncated: truncatedCols,
+    results: displayResults.map((r) => ({ measure: r.friendly_name, value: r.value, label: r.filter_label })),
+    query_plan_cube_corrected: planValidation.cubeCorrected,
+    query_plan_correction_reason: planValidation.correctionReason,
+    query_plan_from_cube: planValidation.fromCubeName,
+    query_plan_to_cube: planValidation.toCubeName,
+    unresolved_filter_groups: unresolvedFilters.length,
+    resolved_filter_groups: resolvedFilterGroups.length,
+    low_confidence_filter_hints: filterLowConfidenceHints.length
   });
 
   return {
@@ -1920,7 +2493,10 @@ export async function runAskPipeline(
       cube: selectedCube.cubeName,
       measure: primary?.friendly_name ?? null,
       mdx: primary?.mdx ?? null,
-      results: allResults,
+      results: displayResults,
+      results_total_count: resultsTotalCount,
+      results_truncated: truncatedRows,
+      dimension_columns_truncated: truncatedCols,
       selection
     }
   };

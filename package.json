@@ -13,7 +13,9 @@
     "test-mssql-connection": "ts-node src/scripts/testMssqlConnection.ts",
     "sync-catalog": "ts-node src/scripts/syncCatalog.ts",
     "export-catalog": "ts-node src/scripts/exportCatalogJson.ts",
-    "export-catalog-fast": "ts-node src/scripts/exportCatalogJson.ts --skip-members"
+    "export-catalog-fast": "ts-node src/scripts/exportCatalogJson.ts --skip-members",
+    "member-values-coverage": "ts-node src/scripts/memberValuesCoverage.ts",
+    "test-chat-ask": "ts-node src/scripts/testChatAskEndpoint.ts"
   },
   "dependencies": {
     "@azure/ai-projects": "^2.0.1",

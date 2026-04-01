@@ -129,12 +129,12 @@ class MdxBridgeService {
    *    8 pts — caption empieza por el término (útil para singulares: "Moto" -> "Moto Carretera")
    *    6 pts — término contiene la caption (mínimo 3 chars para evitar falsos positivos)
    */
-  async findBestMemberByCaption(
+  async findBestMemberByCaptionWithScore(
     catalog: string,
     cubeName: string,
     hierarchyUniqueName: string,
     rawValue: string
-  ): Promise<{ caption: string; uniqueName: string } | null> {
+  ): Promise<{ caption: string; uniqueName: string; score: number } | null> {
     const rows = await this.discoverRows(
       "MDSCHEMA_MEMBERS",
       { CUBE_NAME: cubeName, HIERARCHY_UNIQUE_NAME: hierarchyUniqueName },
@@ -164,9 +164,22 @@ class MdxBridgeService {
       }
     }
 
-    return best && best.score > 0
-      ? { caption: best.caption, uniqueName: best.uniqueName }
-      : null;
+    return best && best.score > 0 ? best : null;
+  }
+
+  async findBestMemberByCaption(
+    catalog: string,
+    cubeName: string,
+    hierarchyUniqueName: string,
+    rawValue: string
+  ): Promise<{ caption: string; uniqueName: string } | null> {
+    const r = await this.findBestMemberByCaptionWithScore(
+      catalog,
+      cubeName,
+      hierarchyUniqueName,
+      rawValue
+    );
+    return r ? { caption: r.caption, uniqueName: r.uniqueName } : null;
   }
 
   /**

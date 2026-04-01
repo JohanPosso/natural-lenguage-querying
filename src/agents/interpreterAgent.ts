@@ -106,6 +106,7 @@ sin especificar valores concretos.
 Señales de isBreakdown=true (quiere TODO el listado):
   - "listado por años" / "listado de todos los años"
   - "desglose por provincia" / "ver por provincia"
+  - "por fabricante" / "por marca" / "por cada fabricante" / "total mercado por fabricante"
   - "todos los años", "por cada año", "año a año", "cada mes"
   - "dame los datos de todos los segmentos"
   - "muéstrame todos los canales"
@@ -125,8 +126,11 @@ breakdownDimension -> qué dimensión usar para el desglose (concepto semántico
   "mes"       -> quiere los datos mes a mes
   "provincia" -> quiere los datos por provincia
   "segmento"  -> quiere los datos por segmento/categoría de vehículo
-  "marca"     -> quiere los datos por marca
+  "marca"     -> quiere los datos por marca (fabricante = marca: "por fabricante", "cada fabricante")
   "canal"     -> quiere los datos por canal de venta
+Si el mensaje incluye el bloque "DIMENSIONES Y DESGLOSES (cubos candidatos)", úsalo solo como
+referencia de qué dimensiones existen en los datos (p. ej. caption "Fabricante"); NO copies MDX ni
+cambies el formato de breakdownDimension (sigue siendo palabras como "marca", "año", etc.).
 
 Si isBreakdown=false -> breakdownDimension: null
 Si la pregunta NO es de desglose -> isBreakdown: false, breakdownDimension: null
@@ -408,6 +412,20 @@ Pregunta: "muéstrame las matriculaciones por provincia en 2024"
   "breakdownDimension": "provincia",
   "domain": "vehicle_registration"
 }
+
+Pregunta: "dame el total mercado por fabricante del cubo matriculaciones"
+{
+  "reasoning": "Quiere el total mercado desglosado por cada fabricante/marca en el cubo Matriculaciones.",
+  "primaryMetrics": ["total mercado"],
+  "entities": [],
+  "timeFilters": {},
+  "preferredCube": "Matriculaciones",
+  "isFollowUp": false,
+  "isMetaQuestion": false,
+  "isBreakdown": true,
+  "breakdownDimension": "marca",
+  "domain": "vehicle_registration"
+}
 === FIN DE EJEMPLOS ===
 `;
 
@@ -416,7 +434,9 @@ Pregunta: "muéstrame las matriculaciones por provincia en 2024"
 export async function analyze(
   question: string,
   conversationHistory: ConversationTurn[] = [],
-  visibleCubeNames: string[] = []
+  visibleCubeNames: string[] = [],
+  /** Jerarquías reales (captions) de cubos candidatos; sin MDX. Opcional. */
+  hierarchyHintsBlock = ""
 ): Promise<QueryIntent> {
   const recentHistory = conversationHistory.slice(-4);
   let historyBlock = "";
@@ -436,10 +456,16 @@ export async function analyze(
       `\n===================================================\n`
     : "";
 
+  const hierarchyBlock =
+    hierarchyHintsBlock.trim().length > 0
+      ? `\n${hierarchyHintsBlock.trim()}\n\n`
+      : "";
+
   const userMessage = `${getCurrentDateContext()}
 
 ${buildJargonContextBlock()}
 ${cubeBlock}
+${hierarchyBlock}
 ${EXAMPLES}
 
 Extrae la intención de esta pregunta:

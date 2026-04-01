@@ -81,6 +81,9 @@ ESTRUCTURA DE FILTRO:
 CÓMO LEER LAS JERARQUÍAS DEL CATÁLOGO:
   Líneas del tipo: 'hierarchy_mdx: "[-MT Territorios].[Provincia]"  caption: "Provincia"'
   hierarchy_mdx = "[-MT Territorios].[Provincia]"   <- copia EXACTAMENTE
+  Si aparece la sección "OTRAS JERARQUÍAS EN ESTE CUBO", son jerarquías SSAS igualmente válidas
+  (a veces no están en la lista corta de dimensiones del manifiesto). Úsalas si encajan con la intención.
+  Para marca o fabricante, si el caption es "Fabricante" o la jerarquía contiene [Fabricante], copia ese hierarchy_mdx.
 
 REGLAS POR TIPO DE ENTIDAD:
 
@@ -126,8 +129,8 @@ REGLAS POR TIPO DE ENTIDAD:
   ----------------
   - PRIMERO: busca si existe una medida con el nombre de la marca (ej: "Matriculaciones Ford").
     Si existe -> selecciona esa medida en lugar de añadir un filtro.
-  - SEGUNDO: si no existe medida con nombre de marca, busca jerarquía de Marca/Fabricante/Modelo
-    (ej: "[Marca].[Marca]", "[-MT Marca].[Marca]") y aplica el nombre de la marca como filtro.
+  - SEGUNDO: si no existe medida con nombre de marca, busca en el catálogo la jerarquía cuyo caption
+    o hierarchy_mdx refleje Marca, Fabricante o Modelo (cada cubo puede nombrarla distinto; copia la del catálogo).
     El sistema resolverá el valor exacto en SSAS automáticamente.
   - CRÍTICO: una entidad de marca NO significa que necesitas un cubo específico de esa marca.
     Los cubos de mercado general (ej: "Matriculaciones") tienen datos de TODAS las marcas
