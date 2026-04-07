@@ -86,11 +86,21 @@ export type ChartData = {
   }>;
 };
 
+export type ChartSpecPayload = {
+  kind: "vega-lite";
+  spec: Record<string, unknown>;
+  meta?: {
+    title?: string;
+    notes?: string[];
+  };
+};
+
 export type AskResponsePayload = {
   question: string;
   answer: string;
   answer_html: string | null;
   chart_data: ChartData | null;
+  chart_spec: ChartSpecPayload | null;
   computed: responseAgent.ComputedAggregations | null;
   data: {
     value: string | null;
@@ -1252,29 +1262,71 @@ function computeAggregations(
   return { sum, avg, max, min, count: nums.length, label };
 }
 
+/** Detecta si la medida representa un porcentaje/ratio (para formatear el eje Y). */
+function isPercentMeasureName(name: string): boolean {
+  const n = name.toLowerCase();
+  return (
+    n.includes("%") || n.includes("cuota") || n.includes("share") ||
+    n.includes("porcentaje") || n.includes("ratio") || n.includes("tasa") ||
+    n.includes("penetracion") || n.includes("cumplimiento") || n.includes("achievement")
+  );
+}
+
+/**
+ * Clasifica el tipo de gráfica más adecuado según los datos.
+ * - Temporal (años/meses) → line
+ * - Pocos valores proporcionales de una sola medida → pie
+ * - Categorías → bar (horizontal si hay muchas)
+ */
+function classifyChartType(
+  labels: string[],
+  datasets: ChartData["datasets"]
+): ChartData["type"] {
+  const isYearOnly    = labels.every(l => /^20\d{2}$/.test(l.trim()));
+  const hasMonthName  = labels.some(l =>
+    /enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre/i.test(l)
+  );
+  const hasYearMonth  = labels.some(l => /\d{4}[-/]\d{2}/.test(l.trim()));
+  const isTimeSeries  = isYearOnly || hasMonthName || hasYearMonth;
+
+  if (isTimeSeries && labels.length <= 36) return "line";
+
+  const isSingleSeries = datasets.length === 1;
+  if (
+    isSingleSeries &&
+    labels.length >= 2 &&
+    labels.length <= 5 &&
+    isPercentMeasureName(datasets[0]?.label ?? "")
+  ) return "pie";
+
+  return "bar";
+}
+
 /**
  * Builds chart-ready data from MeasureResult array.
- * Returns null when there are not enough data points to render a chart (< 2 rows)
- * or when the results are a single scalar value.
+ * Returns null when there are not enough numeric data points to render a chart.
  */
 function buildChartData(results: MeasureResult[]): ChartData | null {
   const forChart = results.filter((r) => !r.is_breakdown_total_row);
   if (forChart.length < 2) return null;
 
-  // Detect if results have dimension breakdown (different dimension values)
-  const hasDimensions = forChart.some((r) => Object.keys(r.filter_combo).length > 0 || r.filter_label !== "sin filtros");
-
+  const hasDimensions = forChart.some(
+    (r) => r.filter_combo.length > 0 || r.filter_label !== "sin filtros"
+  );
   if (!hasDimensions) return null;
 
-  // Group by measure name
+  // Solo filas con valor numérico estricto
+  const numericRows = forChart.filter((r) => isStrictNumericMeasureValue(r.value));
+  if (numericRows.length < 2) return null;
+
+  // Agrupar por medida
   const byMeasure = new Map<string, MeasureResult[]>();
-  for (const r of forChart) {
+  for (const r of numericRows) {
     const key = r.friendly_name;
     if (!byMeasure.has(key)) byMeasure.set(key, []);
     byMeasure.get(key)!.push(r);
   }
 
-  // Build labels from filter combos — use the dimension values as axis labels
   const firstGroup = [...byMeasure.values()][0] ?? [];
   const labels = firstGroup.map((r) => {
     const dimValues = r.filter_combo.map((t) => t.value_caption).join(", ");
@@ -1283,20 +1335,178 @@ function buildChartData(results: MeasureResult[]): ChartData | null {
 
   if (labels.length < 2) return null;
 
-  for (const r of forChart) {
-    if (!isStrictNumericMeasureValue(r.value)) return null;
-  }
-
   const datasets = [...byMeasure.entries()].map(([measureName, mRows]) => ({
     label: measureName,
     data: mRows.map((r) => parseStrictNumeric(r.value) ?? 0)
   }));
 
-  // Choose chart type heuristically
-  const isTimeSeries = labels.some((l) => /\b(20\d{2}|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/i.test(l));
-  const chartType: ChartData["type"] = isTimeSeries ? "line" : labels.length <= 8 ? "bar" : "bar";
+  return { type: classifyChartType(labels, datasets), labels, datasets };
+}
 
-  return { type: chartType, labels, datasets };
+/**
+ * Construye un spec Vega-Lite completo y profesional a partir de chart_data.
+ * El frontend inyecta la configuración de tema (colores, fuentes) sobre el spec devuelto.
+ */
+function buildChartSpec(
+  chartData: ChartData | null,
+  opts?: { title?: string; notes?: string[] }
+): ChartSpecPayload | null {
+  if (!chartData) return null;
+
+  const { type, labels, datasets } = chartData;
+
+  // Formato plano (tidy) para Vega-Lite
+  const values: Array<Record<string, string | number>> = [];
+  for (const ds of datasets) {
+    for (let i = 0; i < labels.length; i++) {
+      const x = labels[i];
+      const y = ds.data[i];
+      if (x === undefined || y === undefined || !Number.isFinite(y)) continue;
+      values.push({ category: x, value: y, series: ds.label });
+    }
+  }
+  if (values.length < 2) return null;
+
+  const hasMultiSeries  = datasets.length > 1;
+  const measureName     = datasets[0]?.label ?? "";
+  const isPercent       = isPercentMeasureName(measureName);
+  const yFormat         = isPercent ? ".1~%" : ",.0f";
+  const manyCategories  = labels.length > 10;
+
+  // Tooltip compartido
+  const tooltipSpec: Array<Record<string, unknown>> = [
+    { field: "category", type: "ordinal", title: "Categoría" },
+    ...(hasMultiSeries ? [{ field: "series", type: "nominal", title: "Serie" }] : []),
+    { field: "value", type: "quantitative", title: measureName || "Valor", format: yFormat }
+  ];
+
+  // Encoding de color: siempre explícito (nunca undefined)
+  const colorEncoding: Record<string, unknown> = hasMultiSeries
+    ? { field: "series", type: "nominal", legend: { title: null, orient: "top" } }
+    : { value: "#1D71B8" };
+
+  let spec: Record<string, unknown>;
+
+  if (type === "line") {
+    spec = {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      width: "container",
+      height: 260,
+      data: { values },
+      mark: {
+        type: "line",
+        strokeWidth: 2.5,
+        point: { filled: true, size: 55, strokeWidth: 0 }
+      },
+      encoding: {
+        x: {
+          field: "category",
+          type: "ordinal",
+          sort: labels,
+          axis: {
+            title: null,
+            labelAngle: labels.length > 8 ? -35 : 0,
+            labelFontSize: 11
+          }
+        },
+        y: {
+          field: "value",
+          type: "quantitative",
+          axis: { title: null, format: yFormat, labelFontSize: 11 },
+          scale: { zero: false }
+        },
+        color: colorEncoding,
+        tooltip: tooltipSpec
+      }
+    };
+  } else if (type === "pie") {
+    spec = {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      width: "container",
+      height: 280,
+      data: { values },
+      mark: { type: "arc", tooltip: true, innerRadius: 55, outerRadius: 120 },
+      encoding: {
+        theta: { field: "value", type: "quantitative" },
+        color: {
+          field: "category",
+          type: "nominal",
+          legend: { title: null, orient: "bottom" }
+        },
+        tooltip: [
+          { field: "category", type: "nominal", title: "Categoría" },
+          { field: "value", type: "quantitative", title: measureName || "Valor", format: yFormat }
+        ]
+      }
+    };
+  } else if (manyCategories) {
+    // Barras horizontales para rankings o listados largos
+    const dynHeight = Math.min(labels.length * 26 + 50, 480);
+    spec = {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      width: "container",
+      height: dynHeight,
+      data: { values },
+      mark: { type: "bar", tooltip: true, cornerRadiusEnd: 3 },
+      encoding: {
+        y: {
+          field: "category",
+          type: "nominal",
+          sort: "-x",
+          axis: { title: null, labelFontSize: 11 }
+        },
+        x: {
+          field: "value",
+          type: "quantitative",
+          axis: { title: null, format: yFormat, labelFontSize: 11 }
+        },
+        color: colorEncoding,
+        tooltip: tooltipSpec
+      }
+    };
+  } else {
+    // Barras verticales para comparaciones categóricas cortas
+    spec = {
+      $schema: "https://vega.github.io/schema/vega-lite/v5.json",
+      width: "container",
+      height: 260,
+      data: { values },
+      mark: {
+        type: "bar",
+        tooltip: true,
+        cornerRadiusTopLeft: 4,
+        cornerRadiusTopRight: 4
+      },
+      encoding: {
+        x: {
+          field: "category",
+          type: "nominal",
+          sort: labels,
+          axis: {
+            title: null,
+            labelAngle: labels.length > 5 ? -35 : 0,
+            labelFontSize: 11
+          }
+        },
+        y: {
+          field: "value",
+          type: "quantitative",
+          axis: { title: null, format: yFormat, labelFontSize: 11 }
+        },
+        color: colorEncoding,
+        tooltip: tooltipSpec
+      }
+    };
+  }
+
+  return {
+    kind: "vega-lite",
+    spec,
+    meta: {
+      title: opts?.title ?? measureName,
+      notes: opts?.notes ?? []
+    }
+  };
 }
 
 // -- Breakdown MDX execution -------------------------------------------------
@@ -1757,7 +1967,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: `Soy un asistente de análisis de datos especializado en el mercado de automoción español. Puedo responder preguntas sobre matriculaciones, ventas, cuotas de mercado, stock y otros indicadores del sector. Tengo acceso a los datos de los siguientes cubos: ${cubeNames0}. Puedes preguntarme, por ejemplo, "¿cuántas matriculaciones hubo en 2024?", "¿cuál es la cuota de mercado de Nissan?" o "¿qué vendió Madrid el año pasado?"`,
-      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
   // -------------------------------------------------------------------------
@@ -1796,7 +2006,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: "No tienes acceso a ningún cubo de datos. Contacta con el administrador para solicitar permisos.",
-      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1867,7 +2077,7 @@ export async function runAskPipeline(
       return {
         question: prompt,
         answer,
-        answer_html, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+        answer_html, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
       };
     }
 
@@ -1912,7 +2122,7 @@ export async function runAskPipeline(
         return {
           question: prompt,
           answer,
-          answer_html, chart_data: null, computed: null, data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
+          answer_html, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: targetCube.cubeName, measure: null, mdx: null, results: [], selection: {} }
         };
       }
     }
@@ -1924,7 +2134,7 @@ export async function runAskPipeline(
       question: prompt,
       answer: `Tienes acceso a los siguientes conjuntos de datos: ${cubeList}. Puedes preguntarme sobre cualquiera de ellos.`,
       answer_html: `<p>Tienes acceso a los siguientes conjuntos de datos:</p><ul>${cubeItems}</ul><p>Puedes preguntarme sobre cualquiera de ellos.</p>`,
-      chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1947,7 +2157,7 @@ export async function runAskPipeline(
     return {
       question: prompt,
       answer: "Solo puedo responder preguntas sobre datos analíticos: matriculaciones, ventas, stock, cuotas de mercado y datos disponibles en los cubos OLAP. Por favor reformula tu pregunta dentro de ese dominio.",
-      answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+      answer_html: null, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
     };
   }
 
@@ -1983,7 +2193,7 @@ export async function runAskPipeline(
       return {
         question: prompt,
         answer: `No tengo acceso al cubo de "${intent.preferredCube}" con tu suscripción actual. Los cubos disponibles para ti son: ${available}.`,
-        answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+        answer_html: null, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
       };
     }
   }
@@ -2039,7 +2249,7 @@ export async function runAskPipeline(
         return {
           question: prompt,
           answer: `No tengo acceso a datos específicos de "${entity.rawValue}" con tu suscripción. Los cubos disponibles para ti son: ${available}.`,
-          answer_html: null, chart_data: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
+          answer_html: null, chart_data: null, chart_spec: null, computed: null, data: { value: null, cube: null, measure: null, mdx: null, results: [], selection: {} }
         };
       }
     }
@@ -2438,6 +2648,13 @@ export async function runAskPipeline(
   // -- Step 9: Compute aggregations + chart data (pure Node.js, no LLM) -------
   const computed = computeAggregations(displayResults, prompt);
   const chart_data = buildChartData(displayResults);
+  const chart_spec = buildChartSpec(chart_data, {
+    title: selection?.measures?.[0]?.friendly_name ?? "Visualización de resultados",
+    notes:
+      truncatedRows || truncatedCols
+        ? ["Visualización parcial: se muestran los primeros resultados disponibles."]
+        : []
+  });
 
   if (computed) {
     pLog("[CALC]", CYAN, "Agregados calculados",
@@ -2464,6 +2681,7 @@ export async function runAskPipeline(
   pLog("[INFO]", GREEN, "RESPUESTA FINAL", `\n${answer}`);
   if (answer_html) pLog("[HTML]", CYAN, "HTML generado", `${answer_html.length} chars`);
   if (chart_data) pLog("[CHART]", CYAN, "Chart data", `type=${chart_data.type} labels=${chart_data.labels.length}`);
+  if (chart_spec) pLog("[CHART]", CYAN, "Chart spec", `${chart_spec.kind}`);
   pLog("[TIME] ", CYAN, `Completado en ${elapsed}s`, `— ${displayResults.length} resultado(s) en payload (${resultsTotalCount} en consulta)`);
   console.log(`${CYAN}${"-".repeat(70)}${RESET}\n`);
 
@@ -2474,6 +2692,7 @@ export async function runAskPipeline(
     answer: answer.slice(0, 300),
     has_html: answer_html !== null,
     has_chart: chart_data !== null,
+    has_chart_spec: chart_spec !== null,
     computed,
     results_total_count: resultsTotalCount,
     results_in_payload: displayResults.length,
@@ -2494,6 +2713,7 @@ export async function runAskPipeline(
     answer,
     answer_html,
     chart_data,
+    chart_spec,
     computed,
     data: {
       value: primary?.value ?? null,

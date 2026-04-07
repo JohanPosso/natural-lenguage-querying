@@ -204,6 +204,50 @@ components:
           type: string
         answer:
           type: string
+        answer_html:
+          type: string
+          nullable: true
+        chart_data:
+          type: object
+          nullable: true
+          description: Compatibilidad legacy para gráficos simples.
+          properties:
+            type:
+              type: string
+              enum: [bar, line, pie]
+            labels:
+              type: array
+              items: { type: string }
+            datasets:
+              type: array
+              items:
+                type: object
+                properties:
+                  label: { type: string }
+                  data:
+                    type: array
+                    items: { type: number }
+                required: [label, data]
+        chart_spec:
+          type: object
+          nullable: true
+          description: Especificación de visualización dinámica (Vega-Lite).
+          properties:
+            kind:
+              type: string
+              enum: [vega-lite]
+            spec:
+              type: object
+              additionalProperties: true
+            meta:
+              type: object
+              properties:
+                title: { type: string }
+                subtitle: { type: string }
+                notes:
+                  type: array
+                  items: { type: string }
+          required: [kind, spec]
         data:
           $ref: "#/components/schemas/AskData"
       required: [question, answer, data]
