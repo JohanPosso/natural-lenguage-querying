@@ -13,6 +13,7 @@ import type { Request, Response, NextFunction } from "express";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
+import { fetchLauncherUser, type LauncherUser } from "../services/launcherUserService";
 
 // -- Tipos internos -----------------------------------------------------------
 
@@ -111,6 +112,15 @@ export async function authMiddleware(
     console.warn("[auth] BYPASS_AUTH activo — omitiendo validación de token (SOLO DESARROLLO)");
     req.userId = "bypass-user";
     req.allowedCubes = null;
+    req.launcherToken = env.devTestToken || undefined;
+    const synthetic: LauncherUser = {
+      id: "bypass-user",
+      email: "",
+      role: env.bypassLauncherRole,
+      customerId: env.bypassLauncherCustomerId,
+      products: []
+    };
+    req.launcherUser = synthetic;
     return next();
   }
   if (env.bypassAuth && isProduction) {
@@ -150,6 +160,17 @@ export async function authMiddleware(
 
     req.userId = userId;
     req.allowedCubes = allowedCubes;
+    req.launcherToken = token;
+
+    try {
+      const profile = await fetchLauncherUser(token, userId);
+      req.launcherUser = profile ?? undefined;
+      if (!profile) {
+        console.warn(`[auth] Perfil Launcher no disponible para userId=${userId}`);
+      }
+    } catch (profileErr) {
+      console.warn("[auth] Error al cargar perfil Launcher:", (profileErr as Error).message);
+    }
 
     console.log(
       `[auth] Usuario ${userId} autenticado — cubos permitidos: [${allowedCubes.join(", ") || "ninguno"}]`

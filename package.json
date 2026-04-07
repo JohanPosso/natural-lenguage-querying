@@ -15,7 +15,8 @@
     "export-catalog": "ts-node src/scripts/exportCatalogJson.ts",
     "export-catalog-fast": "ts-node src/scripts/exportCatalogJson.ts --skip-members",
     "member-values-coverage": "ts-node src/scripts/memberValuesCoverage.ts",
-    "test-chat-ask": "ts-node src/scripts/testChatAskEndpoint.ts"
+    "test-chat-ask": "ts-node src/scripts/testChatAskEndpoint.ts",
+    "ensure-customer-rules-table": "ts-node src/scripts/ensureCustomerRulesTable.ts"
   },
   "dependencies": {
     "@azure/ai-projects": "^2.0.1",

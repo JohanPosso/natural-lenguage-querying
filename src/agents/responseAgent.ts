@@ -77,6 +77,8 @@ export type ResponseContext = {
   computed?: ComputedAggregations | null;
   /** Si hay más datos en SSAS de los que se muestran (filas / columnas de dimensión) */
   truncation?: ResponseTruncation | null;
+  /** Id de cliente Launcher para reglas específicas en el prompt del redactor. */
+  customerId?: string | null;
 };
 
 export type GenerateResult = {
@@ -530,7 +532,13 @@ export async function generate(ctx: ResponseContext): Promise<GenerateResult> {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const msg = attempt === 1 ? userMessage : buildCompactMessage(ctx);
-      const response = await callAgent(env.azureWorkerAgentId, RESPONSE_INSTRUCTIONS, msg);
+      const response = await callAgent(
+        env.azureWorkerAgentId,
+        RESPONSE_INSTRUCTIONS,
+        msg,
+        undefined,
+        ctx.customerId ?? null
+      );
       if (response && response.trim().length > 30) {
         console.log(`[Agent3:Redactor] OK en intento ${attempt}`);
 

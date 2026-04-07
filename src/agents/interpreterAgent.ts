@@ -436,7 +436,9 @@ export async function analyze(
   conversationHistory: ConversationTurn[] = [],
   visibleCubeNames: string[] = [],
   /** Jerarquías reales (captions) de cubos candidatos; sin MDX. Opcional. */
-  hierarchyHintsBlock = ""
+  hierarchyHintsBlock = "",
+  /** Id de cliente Launcher para reglas específicas en el prompt. */
+  customerId?: string | null
 ): Promise<QueryIntent> {
   const recentHistory = conversationHistory.slice(-4);
   let historyBlock = "";
@@ -478,7 +480,9 @@ Responde SOLO con el JSON, sin texto adicional:`;
   const raw = await callAgent(
     env.azurePlannerAgentId,
     INTERPRETER_INSTRUCTIONS,
-    userMessage
+    userMessage,
+    undefined,
+    customerId ?? null
   );
 
   let intent: QueryIntent;

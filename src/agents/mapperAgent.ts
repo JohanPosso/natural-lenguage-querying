@@ -14,7 +14,7 @@
 import { llmService } from "../services/llmService";
 import type { ChatMessage } from "../services/llmService";
 import type { QueryIntent, CatalogMapping, ConversationTurn } from "./types";
-import { globalRulesService } from "../services/globalRulesService";
+import { buildAllRulesPromptBlocks } from "../services/promptRules";
 
 // -- System prompt -------------------------------------------------------------
 
@@ -181,12 +181,13 @@ ilustran el formato, no los datos a usar.
 export async function map(
   intent: QueryIntent,
   catalogContext: string,
-  conversationHistory: ConversationTurn[] = []
+  conversationHistory: ConversationTurn[] = [],
+  customerId?: string | null
 ): Promise<CatalogMapping> {
   const intentBlock   = buildIntentBlock(intent);
   const historyBlock  = buildHistoryBlock(conversationHistory);
   const examplesBlock = buildExamples();
-  const globalRulesBlock = await globalRulesService.buildPromptBlock();
+  const rulesBlock = await buildAllRulesPromptBlocks(customerId ?? null);
 
   const userMessage = `${intentBlock}${historyBlock}
 
@@ -199,7 +200,7 @@ ${catalogContext}
 Produce el mapeo JSON:`;
 
   const messages: ChatMessage[] = [
-    { role: "system", content: globalRulesBlock ? `${SYSTEM_PROMPT}\n\n${globalRulesBlock}` : SYSTEM_PROMPT },
+    { role: "system", content: rulesBlock ? `${SYSTEM_PROMPT}\n\n${rulesBlock}` : SYSTEM_PROMPT },
     { role: "user", content: userMessage }
   ];
 

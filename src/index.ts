@@ -4,6 +4,7 @@ import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import { env } from "./config/env";
 import { authMiddleware } from "./middlewares/authMiddleware";
+import { requireSuperAdmin } from "./middlewares/requireSuperAdmin";
 import { askController } from "./controllers/askController";
 import {
   askInConversationController,
@@ -19,6 +20,17 @@ import {
   listGlobalRulesController,
   updateGlobalRuleController
 } from "./controllers/globalRulesController";
+import { authMeController } from "./controllers/authMeController";
+import {
+  createCustomerRuleController,
+  deleteCustomerRuleController,
+  listCustomerRulesController,
+  updateCustomerRuleController
+} from "./controllers/customerRulesController";
+import {
+  getAdminCustomerController,
+  listAdminCustomersController
+} from "./controllers/adminCustomersController";
 import { memberValueService } from "./services/memberValueService";
 import { xmlaSyncService } from "./services/xmlaSyncService";
 
@@ -76,7 +88,10 @@ app.get("/health", (_req: Request, res: Response) => {
 // El frontend puede llamar a este endpoint al arrancar para obtener la URL correcta
 // sin necesidad de hardcodear "localhost" ni la IP del servidor.
 app.get("/api/config", (_req: Request, res: Response) => {
-  res.json({ api_base_url: env.publicUrl });
+  res.json({
+    api_base_url: env.publicUrl,
+    product_id: env.productId || null
+  });
 });
 
 app.get("/chat", (_req: Request, res: Response) => {
@@ -92,6 +107,9 @@ app.get("/api/docs/swagger.yaml", (_req: Request, res: Response) => {
 // Swagger UI (visual)
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
+// Perfil del usuario (Launcher) + flags para UI de reglas
+app.get("/auth/me", authMiddleware, authMeController);
+
 // Rutas protegidas — requieren token válido del API Launcher
 app.post("/ask", authMiddleware, askController);
 
@@ -101,11 +119,21 @@ app.delete("/api/chat/conversations/:id", authMiddleware, deleteConversationCont
 app.get("/api/chat/conversations/:id/messages", authMiddleware, listMessagesController);
 app.post("/api/chat/ask", authMiddleware, askInConversationController);
 
-// Reglas globales de negocio/sistema (CRUD)
+// Reglas globales de negocio/sistema (lectura: autenticados; escritura: super_admin)
 app.get("/api/global-rules", authMiddleware, listGlobalRulesController);
-app.post("/api/global-rules", authMiddleware, createGlobalRuleController);
-app.patch("/api/global-rules/:id", authMiddleware, updateGlobalRuleController);
-app.delete("/api/global-rules/:id", authMiddleware, deleteGlobalRuleController);
+app.post("/api/global-rules", authMiddleware, requireSuperAdmin, createGlobalRuleController);
+app.patch("/api/global-rules/:id", authMiddleware, requireSuperAdmin, updateGlobalRuleController);
+app.delete("/api/global-rules/:id", authMiddleware, requireSuperAdmin, deleteGlobalRuleController);
+
+// Reglas por cliente (solo super_admin; creación valida producto NLQ en Launcher)
+app.get("/api/customer-rules", authMiddleware, requireSuperAdmin, listCustomerRulesController);
+app.post("/api/customer-rules", authMiddleware, requireSuperAdmin, createCustomerRuleController);
+app.patch("/api/customer-rules/:id", authMiddleware, requireSuperAdmin, updateCustomerRuleController);
+app.delete("/api/customer-rules/:id", authMiddleware, requireSuperAdmin, deleteCustomerRuleController);
+
+// Proxy listado/detalle de clientes Launcher (selector UI para reglas por cliente)
+app.get("/api/admin/customers", authMiddleware, requireSuperAdmin, listAdminCustomersController);
+app.get("/api/admin/customers/:id", authMiddleware, requireSuperAdmin, getAdminCustomerController);
 
 // Admin: cobertura y re-sync de member values (sin auth, solo uso interno/servidor)
 app.get("/api/admin/member-values/coverage", async (_req, res) => {

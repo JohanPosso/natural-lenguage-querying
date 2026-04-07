@@ -1637,7 +1637,8 @@ async function generateNaturalResponse(
   traceId = "unknown",
   computed: responseAgent.ComputedAggregations | null = null,
   lowConfidenceFilterHints: responseAgent.LowConfidenceFilterHint[] = [],
-  truncation: responseAgent.ResponseTruncation | null = null
+  truncation: responseAgent.ResponseTruncation | null = null,
+  customerId: string | null = null
 ): Promise<{ answer: string; answer_html: string | null }> {
   const ssasResults: responseAgent.SsasResult[] = results.map((r) => ({
     measure_name: r.friendly_name,
@@ -1678,7 +1679,8 @@ async function generateNaturalResponse(
     })),
     lowConfidenceFilterHints: lowConfidenceFilterHints.length > 0 ? lowConfidenceFilterHints : undefined,
     computed,
-    truncation: truncation ?? undefined
+    truncation: truncation ?? undefined,
+    customerId
   };
 
   await debugLogger.log("ask", "worker_agent_call", {
@@ -1712,6 +1714,8 @@ export async function runAskPipeline(
     conversationHistory?: ConversationTurn[];
     /** Lista de cubos a los que el usuario tiene acceso. null = todos los cubos. */
     allowedCubes?: string[] | null;
+    /** Id de cliente (Launcher) para reglas dbo.customer_rules. */
+    customerId?: string | null;
   }
 ): Promise<AskResponsePayload> {
   const traceId = options?.traceId ?? randomUUID();
@@ -1720,6 +1724,7 @@ export async function runAskPipeline(
 
   const conversationHistory = options?.conversationHistory ?? [];
   const allowedCubes = options?.allowedCubes ?? null; // null = sin restricción (BYPASS_AUTH)
+  const customerId = options?.customerId ?? null;
 
   await debugLogger.log("ask", "pipeline_start", {
     traceId,
@@ -1830,7 +1835,8 @@ export async function runAskPipeline(
     normalizedPrompt,
     sanitizedHistory,
     visibleCubeNames,
-    interpreterHierarchyHints
+    interpreterHierarchyHints,
+    customerId
   );
   intent = applyFabricanteMarcaBreakdownHeuristic(normalizedPrompt, intent);
   await debugLogger.log("ask", "intent_extracted", { traceId, intent });
@@ -2047,7 +2053,7 @@ export async function runAskPipeline(
   pLog("[MAP] ", MAGENTA, "Agent 2 (Mapeador): seleccionando cubo, medidas y filtros...");
   let selection: LlmSelection;
   try {
-    selection = await mapperAgent.map(intent, catalogContext, sanitizedHistory);
+    selection = await mapperAgent.map(intent, catalogContext, sanitizedHistory, customerId);
     selection.filters = normalizeFilters(selection.filters as unknown[]);
   } catch (err) {
     await debugLogger.log("ask", "mapper_agent_error", {
@@ -2168,7 +2174,7 @@ export async function runAskPipeline(
     // Retry with expanded context (all visible cubes)
     pLog("[WARN] ", YELLOW, "Cubo no encontrado, reintentando con catálogo completo...");
     const expandedContext = await buildCatalogContextWithHierarchies(visibleCubes.slice(0, 8), prompt);
-    const retryMapping = await mapperAgent.map(intent, expandedContext, sanitizedHistory);
+    const retryMapping = await mapperAgent.map(intent, expandedContext, sanitizedHistory, customerId);
     selectedCube = resolveCube({ ...manifest, cubes: visibleCubes }, retryMapping.cube_name);
     selection.cube_name = retryMapping.cube_name;
     selection.measures = retryMapping.measures;
@@ -2449,7 +2455,8 @@ export async function runAskPipeline(
     traceId,
     computed,
     filterLowConfidenceHints,
-    responseTruncation
+    responseTruncation,
+    customerId
   );
   const primary = displayResults[0];
 
@@ -2511,7 +2518,8 @@ export async function askController(req: Request, res: Response): Promise<Respon
     const traceId = randomUUID();
     const payload = await runAskPipeline(userPrompt, {
       traceId,
-      allowedCubes: req.allowedCubes ?? null
+      allowedCubes: req.allowedCubes ?? null,
+      customerId: req.launcherUser?.customerId ?? null
     });
     return res.status(200).json(payload);
   } catch (error) {

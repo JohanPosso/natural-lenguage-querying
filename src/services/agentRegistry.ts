@@ -16,7 +16,7 @@ import { getBearerTokenProvider, type TokenCredential } from "@azure/identity";
 import { buildAzureCredential } from "./azureCredential";
 import axios from "axios";
 import { env } from "../config/env";
-import { globalRulesService } from "./globalRulesService";
+import { buildAllRulesPromptBlocks } from "./promptRules";
 
 const AI_SCOPE = "https://ai.azure.com/.default";
 const RESPONSES_API_VERSION = "2025-11-15-preview";
@@ -251,13 +251,13 @@ export async function callAgent(
   agentId: string,
   fallbackInstructions: string,
   userMessage: string,
-  contextMessages?: Array<{ role: "user" | "assistant"; content: string }>
+  contextMessages?: Array<{ role: "user" | "assistant"; content: string }>,
+  /** Reglas por cliente (Launcher customerId) además de las globales. */
+  customerId?: string | null
 ): Promise<string> {
   const { instructions, model } = await loadAgent(agentId, fallbackInstructions);
-  const globalRulesBlock = await globalRulesService.buildPromptBlock();
-  const effectiveInstructions = globalRulesBlock
-    ? `${instructions}\n\n${globalRulesBlock}`
-    : instructions;
+  const rulesBlock = await buildAllRulesPromptBlocks(customerId ?? null);
+  const effectiveInstructions = rulesBlock ? `${instructions}\n\n${rulesBlock}` : instructions;
 
   const endpoint = env.azureExistingAiProjectEndpoint!.replace(/\/$/, "");
   const url = `${endpoint}/openai/responses?api-version=${RESPONSES_API_VERSION}`;

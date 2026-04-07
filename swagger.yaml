@@ -3,8 +3,11 @@ info:
   title: Natural Language Querying API
   version: 1.0.0
   description: >
-    API para consultas analíticas en lenguaje natural con persistencia de conversaciones
-    y gestión de reglas globales.
+    API para consultas analíticas en lenguaje natural con persistencia de conversaciones,
+    reglas globales y reglas por cliente. Autenticación vía JWT y permisos de cubos/producto
+    vía API Launcher (sin rol de aplicación en la mayoría de rutas). El rol super_admin
+    solo aplica al módulo de administración de reglas (alta/edición/baja de reglas globales y
+    por cliente, y proxy de listado/detalle de clientes para ese flujo).
 servers:
   - url: /
     description: Servidor activo (la URL real se inyecta desde PUBLIC_URL al arrancar)
@@ -15,7 +18,15 @@ tags:
   - name: Chat
     description: Conversaciones persistidas y mensajes
   - name: Global Rules
-    description: CRUD de reglas globales de negocio/sistema
+    description: Reglas globales (lectura autenticados; alta/edición/baja solo super_admin)
+  - name: Config
+    description: Configuración pública para el frontend
+  - name: Auth
+    description: Perfil del usuario (Launcher); cualquier usuario autenticado - no exige super_admin
+  - name: Customer Rules
+    description: Reglas por cliente Launcher (solo super_admin)
+  - name: Admin Customers
+    description: Proxy de clientes del Launcher (solo super_admin)
 
 components:
   securitySchemes:
@@ -229,11 +240,89 @@ components:
           format: date-time
       required: [id, name, content, is_active, priority, created_at, updated_at]
 
+    ApiConfigResponse:
+      type: object
+      properties:
+        api_base_url:
+          type: string
+        product_id:
+          type: string
+          nullable: true
+      required: [api_base_url]
+
+    AuthMeUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        firstName: { type: string, nullable: true }
+        lastName: { type: string, nullable: true }
+        username: { type: string, nullable: true }
+        role: { type: string }
+        customerId: { type: string, nullable: true }
+        products:
+          type: array
+          items: { type: string }
+      required: [id, email, role]
+
+    AuthMeResponse:
+      type: object
+      description: >
+        Disponible para cualquier usuario autenticado. Los flags can_manage_* son true solo
+        si user.role es super_admin (para decidir si mostrar el módulo de reglas en el front).
+      properties:
+        user:
+          $ref: "#/components/schemas/AuthMeUser"
+        can_manage_global_rules:
+          type: boolean
+          description: true solo si super_admin — gestión de reglas globales
+        can_manage_customer_rules:
+          type: boolean
+          description: true solo si super_admin — gestión de reglas por cliente
+        canManageRules:
+          type: boolean
+          description: Alias útil para la UI (típicamente igual que super_admin en este producto)
+      required: [user, can_manage_global_rules, can_manage_customer_rules, canManageRules]
+
+    CustomerRule:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        customer_id: { type: string }
+        name: { type: string }
+        content: { type: string }
+        is_active: { type: boolean }
+        priority: { type: integer }
+        created_by_user_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, customer_id, name, content, is_active, priority, created_at, updated_at]
+
+    CustomerRuleCreateRequest:
+      type: object
+      required: [customer_id, name, content]
+      properties:
+        customer_id: { type: string }
+        name: { type: string }
+        content: { type: string }
+        is_active: { type: boolean, default: true }
+        priority: { type: integer, default: 100 }
+
+    CustomerRulePatchRequest:
+      type: object
+      properties:
+        name: { type: string }
+        content: { type: string }
+        is_active: { type: boolean }
+        priority: { type: integer }
+
 paths:
   /ask:
     post:
       tags: [Ask]
       summary: Ejecuta una consulta analítica directa
+      description: >
+        Requiere token válido y permiso de producto en el Launcher (ID_CUBE). No evalúa rol super_admin.
       security:
         - BearerAuth: []
       requestBody:
@@ -271,6 +360,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Sin permisos para este producto (Launcher)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Error interno del pipeline
           content:
@@ -282,6 +377,7 @@ paths:
     get:
       tags: [Chat]
       summary: Lista conversaciones
+      description: Usuario autenticado; no requiere rol super_admin.
       security:
         - BearerAuth: []
       responses:
@@ -442,6 +538,8 @@ paths:
     post:
       tags: [Chat]
       summary: Ejecuta pregunta en conversación persistida
+      description: >
+        Permiso de producto vía Launcher (403 si no). No requiere rol super_admin.
       security:
         - BearerAuth: []
       requestBody:
@@ -481,6 +579,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Sin permisos para este producto (Launcher)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Error interno
           content:
@@ -492,6 +596,7 @@ paths:
     get:
       tags: [Global Rules]
       summary: Lista reglas globales
+      description: Lectura para cualquier usuario autenticado (no exige super_admin).
       security:
         - BearerAuth: []
       parameters:
@@ -530,6 +635,7 @@ paths:
     post:
       tags: [Global Rules]
       summary: Crea una regla global
+      description: Solo rol super_admin (módulo reglas).
       security:
         - BearerAuth: []
       requestBody:
@@ -573,6 +679,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Error interno
           content:
@@ -584,6 +696,7 @@ paths:
     patch:
       tags: [Global Rules]
       summary: Actualiza una regla global
+      description: Solo rol super_admin (módulo reglas).
       security:
         - BearerAuth: []
       parameters:
@@ -637,6 +750,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Error interno
           content:
@@ -646,6 +765,7 @@ paths:
     delete:
       tags: [Global Rules]
       summary: Elimina una regla global
+      description: Solo rol super_admin (módulo reglas).
       security:
         - BearerAuth: []
       parameters:
@@ -677,6 +797,359 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/config:
+    get:
+      tags: [Config]
+      summary: URL base de la API y product_id canónico
+      description: Público. Comparar product_id con el parámetro _u del Launcher si aplica.
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiConfigResponse"
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Perfil del usuario (Launcher)
+      description: >
+        Cualquier usuario autenticado. Devuelve datos del usuario y flags booleanos para
+        mostrar u ocultar el módulo de reglas (solo si super_admin). No requiere rol super_admin para llamar.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthMeResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Perfil no disponible
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/customer-rules:
+    get:
+      tags: [Customer Rules]
+      summary: Lista reglas por customer_id (Launcher)
+      description: Solo rol super_admin (módulo reglas).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: customer_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CustomerRule"
+                required: [rules]
+        "400":
+          description: Falta customer_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Customer Rules]
+      summary: Crea regla de cliente (valida producto NLQ en Launcher)
+      description: Solo rol super_admin (módulo reglas).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerRuleCreateRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rule:
+                    $ref: "#/components/schemas/CustomerRule"
+                required: [rule]
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: >
+            Sin rol super_admin; o el cliente no tiene el producto NLQ en el Launcher
+            (error CUSTOMER_NO_NLQ_PRODUCT en cuerpo).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/customer-rules/{id}:
+    patch:
+      tags: [Customer Rules]
+      summary: Actualiza regla de cliente
+      description: Solo rol super_admin (módulo reglas).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerRulePatchRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rule:
+                    $ref: "#/components/schemas/CustomerRule"
+                required: [rule]
+        "400":
+          description: Request inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Customer Rules]
+      summary: Elimina regla de cliente
+      description: Solo rol super_admin (módulo reglas).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  id:
+                    type: string
+                    format: uuid
+                required: [ok, id]
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/customers:
+    get:
+      tags: [Admin Customers]
+      summary: Lista clientes (proxy Launcher)
+      description: Solo rol super_admin — para selector del módulo de reglas por cliente.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Respuesta del Launcher
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Error de proxy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/admin/customers/{id}:
+    get:
+      tags: [Admin Customers]
+      summary: Detalle de cliente y has_nlq_product
+      description: Solo rol super_admin — para validar cliente antes de crear reglas.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payload Launcher más has_nlq_product
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          description: No autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Prohibido — requiere rol super_admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Cliente no encontrado
           content:
             application/json:
               schema:

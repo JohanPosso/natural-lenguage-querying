@@ -66,6 +66,11 @@ export const env = {
   apiLauncherEndpoint: process.env.API_LAUNCHER_ENDPOINT ?? "",
   productId: process.env.PRODUCT_ID ?? "",
   bypassAuth: process.env.BYPASS_AUTH === "true",
+  /** Rol simulado del Launcher cuando BYPASS_AUTH=true (solo desarrollo). */
+  bypassLauncherRole: process.env.BYPASS_LAUNCHER_ROLE ?? "super_admin",
+  /** customerId simulado en bypass (opcional), para probar reglas por cliente. */
+  bypassLauncherCustomerId:
+    process.env.BYPASS_LAUNCHER_CUSTOMER_ID?.trim() || null,
   devTestToken: process.env.DEV_TEST_TOKEN ?? "",
 
   // -- Base de datos SQL Server (chat persistence) ---------------------------

@@ -152,7 +152,8 @@ export async function askInConversationController(req: Request, res: Response): 
     const payload = await runAskPipeline(question, {
       traceId,
       conversationHistory,
-      allowedCubes: req.allowedCubes ?? null
+      allowedCubes: req.allowedCubes ?? null,
+      customerId: req.launcherUser?.customerId ?? null
     });
     await chatPersistenceService.addMessage(conversationId, "assistant", payload.answer, payload);
     await debugLogger.log("chat", "conversation_answer_sent", {
